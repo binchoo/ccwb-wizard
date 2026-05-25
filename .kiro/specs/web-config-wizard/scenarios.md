@@ -1,5 +1,6 @@
 # Scenarios — web-config-wizard
 
+> **상위 문서**: `rule-of-thumb.md` (운영 원칙).
 > **위계**: 도메인 모델의 진실의 원천 (Source of Truth)
 > **위계 스킵 사유**: 위자드 단계, 도메인 strategy 클래스, materialize() 매핑이 모두 본 문서를 1차 출처로 한다. requirements/design/tasks는 본 문서를 인용한다.
 
@@ -27,7 +28,6 @@ class Config:
     # Page 3 — AWS Infrastructure
     aws_region: str                       # 인프라 배포 region
     stack_base_name: str                  # 모든 스택의 prefix
-    federation_type: Literal["cognito", "direct"]
 
     # Page 2 — Identity Provider (one of 5 strategies)
     provider: IdentityProvider            # 다형성, 아래 표 참조
@@ -99,14 +99,20 @@ Azure provider만 운영자 머신 keyring/cert 의존을 가진다. CFN은 `bed
 TLS thumbprint는 `jwks_uri`의 호스트로 TLS handshake → leaf certificate SHA-1을 계산해서 채운다. 실패 시 운영자가 직접 입력.
 
 
-## 2. Federation Types (2종)
+## 2. Federation: IAM Direct 단일 경로
 
-| federation | CFN 영향 | 클라이언트 측 영향 | 비고 |
-|-----------|---------|------------------|------|
-| **cognito** | auth 스택 안에 `Cognito::IdentityPool` 포함 | settings.json/AWS config는 Cognito identity 사용 | max_session_duration=28800 (8h) |
-| **direct** | auth 스택이 `IAM::Role` (federated)만 출력 | AWS config가 federated_role_arn 직접 참조 | max_session_duration=43200 (12h) |
+본 spec의 federation 백본은 단 하나, **AWS IAM Direct (`AssumeRoleWithWebIdentity`)**다.
+앞단의 OIDC IdP 백엔드가 §1의 5종 중 무엇인지에 따라 CFN 템플릿과 입력이 달라진다.
 
-federation_type은 모든 auth 스택의 공통 파라미터(`FederationType`)에 그대로 전달된다.
+분기 필드(`federation_type` 류)는 두지 않는다 — 단일 경로이므로 무의미.
+
+| CFN 영향 | 설명 |
+|---------|------|
+| 모든 IdP의 auth 스택 | `IAM::OIDCProvider` + `IAM::Role` (federated) 출력 |
+| Cognito Identity Pool | 미사용 (다이어그램에서 federation 박스의 백본은 IAM이며, Cognito는 IdP 백엔드 옵션 중 하나) |
+| max_session_duration | 43200 (12h) |
+
+> 참고: AWS SSO / IAM Identity Center도 OIDC IdP 백엔드 후보가 될 수 있으나 본 spec 범위에는 포함하지 않는다.
 
 ## 3. Bedrock Models (모델 매트릭스)
 
@@ -161,9 +167,28 @@ settings.json env에 `ANTHROPIC_*_MODEL_ARN` 형태로 주입. 빈 항목은 생
 
 CFN: `bedrock-logging.yaml` (이미 존재).
 
+destination은 **bit flag** 패턴으로 두 sink의 조합을 표현한다.
+
+| bits | 값 | CW Logs | S3 | 비고 |
+|---|---|---|---|---|
+| `01` | `s3` | × | ○ | Athena historical analysis만 필요할 때 |
+| `10` | `cwlogs` | ○ | × | 기본. Metric filter + Quota Lambda 사용 |
+| `11` | `both` | ○ | ○ | 양쪽 다 |
+
+`00`은 무효 (sink 없으면 quota/attribution 깨짐). 위자드는 차단.
+
+CFN 파라미터는 기존 `bedrock-logging.yaml`의 `BedrockLoggingDestination`이 받는 문자열 enum (`cloudwatch`/`s3`/`both`)을 그대로 사용. UI 표현(체크박스 두 개)과 매핑:
+
+| CW Logs 체크 | S3 체크 | CFN 값 |
+|-----|-----|-----|
+| ✓ | × | `cloudwatch` |
+| × | ✓ | `s3` |
+| ✓ | ✓ | `both` |
+| × | × | (차단) |
+
 | 필드 | 입력값 | CFN 파라미터 | 비고 |
 |------|-------|-------------|------|
-| `destination` | `cloudwatch` / `s3` / `both` | `BedrockLoggingDestination` | 기본 `cloudwatch` |
+| `destination` | bit flag (위 표) | `BedrockLoggingDestination` | 기본 `cloudwatch` (10) |
 | `retention_days` | 1–3653, 정수 | `DataRetentionDays` | 기본 90 |
 | (derived) profile_name | Config.profile_name | `ProfileName` | — |
 | (derived) metric_namespace | "ClaudeCodeBedrock" | `MetricNamespace` | 고정값 |

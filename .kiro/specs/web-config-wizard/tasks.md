@@ -1,10 +1,12 @@
 # Implementation Plan — web-config-wizard
 
-> **상위 문서**: `requirements.md`, `design.md`, `scenarios.md`
+> **상위 문서**: `rule-of-thumb.md`, `requirements.md`, `design.md`, `scenarios.md`
 
 ## Overview
 
-기존 `source/claude_code_with_bedrock/` (CLI/위자드 코드)를 통째 삭제하고, web 위자드를 새로 구축한다. 보존 자산은 `deployment/infrastructure/*`, `source/credential_provider/*`, `source/claude_code_with_bedrock/models.py`(모델 매트릭스 발췌), `install.sh`/`install.bat`.
+기존 `source/claude_code_with_bedrock/` (CLI/위자드 코드)를 통째 삭제하고, web 위자드를 새로 구축한다. 보존 자산은 `deployment/infrastructure/*`, `source/credential_provider/*`, `source/claude_code_with_bedrock/models.py`(모델 매트릭스 발췌). install.sh/install.bat은 위자드의 packaging 단계에서 동적 생성하므로 별도 보존 자산 없음.
+
+CLI 명령(`ccwb package`, `ccwb distribute` 등)은 web 위자드로 통합되거나 별도 spec으로 처리되며, 본 spec에서 보존하지 않는다 (rule-of-thumb §6).
 
 작업은 6 phase로 진행한다.
 
@@ -61,11 +63,12 @@
   - 단위 테스트: 각 strategy snapshot
   - _Validates: Requirement 3.1, 3.4, scenarios §1_
 
-- [ ] 2.4 Federation / Distribution Strategy
-  - `federation.py` (cognito / direct)
+- [ ] 2.4 Distribution Strategy
   - `distribution.py` (PresignedS3 / LandingPage)
   - 단위 테스트
-  - _Validates: Requirement 3.5, scenarios §2 §6_
+  - _Validates: scenarios §6_
+
+  > Federation은 IAM Direct 단일 경로라 strategy 클래스 없음 (rule-of-thumb §2). 단순 상수로 처리.
 
 - [ ] 2.5 materialize() 통합
   - `web/domain/ccwb_domain/materialize.py`
@@ -112,7 +115,7 @@
   - _Validates: Requirement 1.6, 1.7, 2.1, 2.5_
 
 - [ ] 3.3 Scenarios API
-  - `api/scenarios.py` — provider list, distribution types, federation types, model matrix를 frontend가 쓸 수 있는 JSON으로 export
+  - `api/scenarios.py` — provider list, distribution types, model matrix를 frontend가 쓸 수 있는 JSON으로 export
   - `wizard_inputs()` 결과 직렬화
   - _Validates: Requirement 3.6, 5.4_
 
@@ -172,7 +175,7 @@
   - _Validates: Requirement 1.4, 3.6, scenarios §1_
 
 - [ ] 4.7 페이지 3 — AWS Infrastructure
-  - region select, stack_base_name input, federation_type radio
+  - region select, stack_base_name input
   - _Validates: Requirement 1.2, scenarios §2_
 
 - [ ] 4.8 페이지 4 — Bedrock 모델
@@ -181,7 +184,9 @@
   - _Validates: scenarios §3_
 
 - [ ] 4.9 페이지 5 — Logging + Quota
-  - destination select, retention input
+  - destination을 두 체크박스(CW Logs / S3)로 노출 — bit flag (rule-of-thumb §3)
+  - 둘 다 끄면 차단 (`00`은 무효)
+  - retention_days input
   - quota toggle → 활성 시 monthly/daily/enforcement 입력
   - _Validates: scenarios §4 §5_
 

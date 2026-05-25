@@ -1,10 +1,10 @@
 # Requirements Document
 
-> **상위 문서**: `scenarios.md` (선택지 카탈로그, 진실의 원천)
+> **상위 문서**: `rule-of-thumb.md` (운영 원칙), `scenarios.md` (선택지 카탈로그, 진실의 원천)
 
 ## Introduction
 
-기존 `poetry run ccwb init` 대화형 위자드는 init.py 한 파일이 2700줄에 달하는 단일 거대 함수, ~70 필드의 평탄한 Profile dataclass, IdP/distribution/federation 분기가 if/elif로 흩어진 구조다. 위자드 진행 추적이 어렵고, AI agent가 동일한 작업을 수행하려면 별도 인터페이스를 또 만들어야 한다.
+기존 `poetry run ccwb init` 대화형 위자드는 init.py 한 파일이 2700줄에 달하는 단일 거대 함수, ~70 필드의 평탄한 Profile dataclass, IdP/distribution 분기가 if/elif로 흩어진 구조다. 위자드 진행 추적이 어렵고, AI agent가 동일한 작업을 수행하려면 별도 인터페이스를 또 만들어야 한다.
 
 본 spec은 위 위자드를 **웹 기반 SPA + 스키마 있는 텍스트 파일** 구조로 갈아엎는다. 핵심 결정:
 
@@ -12,7 +12,8 @@
 2. 위자드 산출물은 **단일 Config text file**(`~/.ccwb/profiles/<name>.json`)이며, schema_version으로 진화한다.
 3. CLI 명령과 AI agent도 동일한 Config 파일을 read/write할 수 있어야 한다.
 4. **CFN 템플릿과 credential-process 바이너리는 변경하지 않는다** — 위자드가 만들어내는 입력만 새 형태로 바꾼다.
-5. 코드 양은 절반 이하로 줄인다 — IdP/distribution/federation 분기는 strategy 패턴으로 응집한다.
+5. 코드 양은 절반 이하로 줄인다 — IdP/distribution 분기는 strategy 패턴으로 응집한다.
+6. **Federation은 IAM Direct 단일 경로**다. 5종 IdP는 그 백엔드 OIDC 제공자일 뿐이며 federation 타입 분기는 두지 않는다 (rule-of-thumb §2).
 
 ## Requirements
 
@@ -60,7 +61,7 @@
 2. THE 각 서브클래스는 `cfn_template_path`, `cfn_parameters`, `settings_env`, `aws_config_section`, `wizard_inputs` 5개 메서드를 구현해야 한다.
 3. WHEN 새 IdP를 추가하면 THEN 도메인 디렉토리에 클래스 1개를 추가하고 registry에 등록하는 것 외 다른 코드 변경이 없어야 한다.
 4. WHERE Distribution은 PresignedS3 / LandingPage 두 strategy를 가진다.
-5. WHERE Federation은 cognito / direct 두 strategy를 가진다.
+5. WHERE Federation은 IAM Direct 단일 경로이며 strategy로 응집하지 않는다 (rule-of-thumb §2). 도메인 코드는 federation 분기 없이 작성된다.
 6. WHEN 위자드 페이지가 strategy 메타데이터를 표시할 때 THE 페이지 코드는 strategy의 `wizard_inputs()`만 호출하고 자체 분기 로직을 가지지 않아야 한다.
 7. THE 도메인 모델은 frontend/CLI/agent와 상관없이 단독 import 가능해야 한다 (FastAPI/React 의존성 없음).
 
@@ -135,7 +136,7 @@
 | **Config** | 운영자가 한 번 작성하는 단일 JSON 파일. `~/.ccwb/profiles/<name>.json`에 영구 저장됨. UI/CLI/agent 공통 진실의 원천. |
 | **Profile** | Config 파일 1개. 이름(`profile_name`)으로 식별. 한 운영자가 여러 profile 보유 가능. |
 | **Draft** | 위자드 진행 중 임시 저장본. 명시적 "Save as Profile" 전까지 영구 저장본에 영향 없음. |
-| **Strategy** | 분기 시나리오(IdP, Federation, Distribution)를 응집한 클래스. ABC + 서브클래스 패턴. |
+| **Strategy** | 분기 시나리오(IdP, Distribution)를 응집한 클래스. ABC + 서브클래스 패턴. Federation은 단일 경로라 strategy로 두지 않음. |
 | **materialize** | `Config → DeploymentArtifacts` 함수. CFN 파라미터, settings.json 템플릿, ~/.aws/config, keyring writes를 한꺼번에 생성. |
 | **DeploymentArtifacts** | materialize의 출력. UI/CLI/agent가 deploy 단계에서 소비. |
 | **scenarios.md** | 선택지 카탈로그. 사람 가독 표 + Python literal export. 도메인 코드의 진실의 원천. |

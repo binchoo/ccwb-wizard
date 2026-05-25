@@ -1,6 +1,6 @@
 # Design — web-config-wizard
 
-> **상위 문서**: `requirements.md`, `scenarios.md`
+> **상위 문서**: `rule-of-thumb.md`, `requirements.md`, `scenarios.md`
 
 ## Overview
 
@@ -28,10 +28,11 @@
 ┌──────────────────────────────────────────────────────────────────┐
 │  Domain (pure Python, 의존성 최소)                                │
 │  - Config dataclass + schema_version                             │
-│  - IdentityProvider / Federation / Distribution strategy classes │
+│  - IdentityProvider / Distribution strategy classes              │
 │  - bedrock_models.py (모델 매트릭스)                              │
 │  - materialize(config) → DeploymentArtifacts                     │
 │                                                                   │
+│  Federation은 IAM Direct 단일 경로 — strategy 없음.              │
 │  AI agent와 CLI도 이 모듈을 직접 import해 사용.                  │
 └──────────────────────────────────────────────────────────────────┘
                           │
@@ -52,7 +53,7 @@
 | 진실의 원천 | Config 텍스트 파일 (JSON) | UI/CLI/agent가 동등하게 read/write 가능 |
 | Frontend | Vite + React + TS + yarn | 운영자 요청. 무거운 dep 없이 빠른 부팅 |
 | Backend | FastAPI (Python) | boto3/keyring 의존성 자연스러움. CFN 템플릿이 어차피 Python 도메인에서 처리됨 |
-| 분기 응집 | strategy 패턴 (IdP/Federation/Distribution) | scenarios.md의 카탈로그 ↔ 코드 1:1 매핑 |
+| 분기 응집 | strategy 패턴 (IdP/Distribution) | scenarios.md의 카탈로그 ↔ 코드 1:1 매핑. Federation은 단일 경로라 strategy 없음 |
 | 진행상태 저장 | backend draft 파일 (`<name>.draft.json`) + frontend localStorage 캐시 | UI close 후에도 같은 단계에서 재개. 다른 머신 이동은 지원 안 함 |
 | 위자드 진입점 | `ccwb` 단일 명령 → FastAPI 실행 + 브라우저 자동 오픈 | 운영자 친화 |
 
@@ -126,7 +127,6 @@
     │   │   ├── cognito.py
     │   │   ├── auth0.py
     │   │   └── generic.py
-    │   ├── federation.py             # CognitoFederation / DirectSTSFederation
     │   ├── distribution.py           # PresignedS3 / LandingPage
     │   ├── bedrock_models.py         # 모델 매트릭스 (literal data)
     │   ├── materialize.py            # Config → DeploymentArtifacts
@@ -156,7 +156,6 @@ class Config:
     schema_version: str
     aws_region: str
     stack_base_name: str
-    federation_type: str
     provider: dict                    # { "type": "okta", "domain": "...", ... }
     model_id: str
     cross_region_profile: str
@@ -167,6 +166,7 @@ class Config:
     distribution: dict | None
     enable_codebuild_windows: bool
     enable_cowork_3p: bool
+    enable_cc_telemetry: bool             # CLAUDE_CODE_ENABLE_TELEMETRY (기본 false=0)
     tags: dict[str, str]
 
     @classmethod
@@ -228,18 +228,17 @@ frontend의 동적 form은 `GET /api/scenarios/providers`가 반환하는 `wizar
 ```python
 def materialize(config: Config) -> DeploymentArtifacts:
     provider = provider_strategy(config.provider)
-    federation = federation_strategy(config.federation_type)
     distribution = distribution_strategy(config.distribution) if config.distribution else None
 
     stacks: list[StackPlan] = []
 
-    # 1. auth (provider별 CFN)
+    # 1. auth (provider별 CFN, federation은 항상 IAM Direct)
     stacks.append(StackPlan(
         stack_name=f"{config.stack_base_name}-auth",
         template_path=provider.cfn_template_path(),
         parameters={
             **provider.cfn_parameters(config),
-            **federation.cfn_parameters(config),
+            "FederationType": "direct",                # rule-of-thumb §2 — 항상 direct
             "AllowedBedrockRegions": ",".join(allowed_regions_for(config)),
             "EnableMonitoring": "true",
         },
@@ -264,7 +263,7 @@ def materialize(config: Config) -> DeploymentArtifacts:
     # 7. s3bucket (항상)
 
     settings_template = build_settings_template(config, provider)
-    aws_config = build_aws_config(config, provider, federation)
+    aws_config = build_aws_config(config, provider)
     keyring_writes = collect_keyring_writes(config, provider)
 
     return DeploymentArtifacts(
@@ -312,7 +311,7 @@ draft 저장 정책: 페이지 N → N+1 진행 시 매번 `POST /api/profile/{n
    │
 2-Provider       provider type 선택 → 동적 sub-form (OktaForm 등)
    │
-3-Infra          aws_region, stack_base_name, federation_type
+3-Infra          aws_region, stack_base_name
    │
 4-Bedrock        모델 매트릭스 cascade, inference profile (옵션)
    │
@@ -421,7 +420,6 @@ class OktaProvider(IdentityProvider):
 
     def cfn_parameters(self, config: Config) -> dict[str, str]:
         return {
-            "FederationType": config.federation_type,
             "OktaDomain": self.domain,
             "OktaClientId": self.client_id,
             "IdentityPoolName": config.stack_base_name,
@@ -435,7 +433,8 @@ class OktaProvider(IdentityProvider):
             "AWS_REGION": config.source_region,
             "ANTHROPIC_MODEL": config.model_id,
             "ANTHROPIC_CUSTOM_HEADERS": "__ANTHROPIC_CUSTOM_HEADERS__",  # install.sh가 치환
-            "CLAUDE_CODE_USE_MANTLE": "0",
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "0" if not config.enable_cc_telemetry else "1",
+            "CLAUDE_CODE_USE_MANTLE": "0",                               # rule-of-thumb §4
         }
 
     def aws_config_section(self, config: Config) -> str:
@@ -497,7 +496,6 @@ frontend의 dynamic form 컴포넌트가 `FormField[]`를 받아 자동 렌더�
   "profile_name": "default",
   "aws_region": "us-east-1",
   "stack_base_name": "claude-code-auth",
-  "federation_type": "direct",
   "provider": {
     "type": "okta",
     "domain": "company.okta.com",
@@ -528,6 +526,7 @@ frontend의 dynamic form 컴포넌트가 `FormField[]`를 받아 자동 렌더�
   },
   "enable_codebuild_windows": false,
   "enable_cowork_3p": true,
+  "enable_cc_telemetry": false,
   "tags": {
     "Project": "claude-code",
     "Owner": "platform-team"
@@ -658,7 +657,7 @@ scenarios.md의 IdP 표(5종)에 등록된 provider 목록과 `PROVIDERS` regist
 
 같은 Config로 `materialize()`를 두 번 호출하면 같은 `DeploymentArtifacts`를 반환한다. 시간/랜덤/외부 상태에 의존 금지.
 
-**검증**: snapshot 테스트. 5종 provider × 2종 federation × 2종 distribution = 20개 fixture를 두고 expected output과 비교.
+**검증**: snapshot 테스트. 5종 provider × 2종 distribution(presigned-s3/landing-page) × 4종 logging destination(s3/cwlogs/both, quota on/off) ≈ 20개 fixture를 두고 expected output과 비교.
 
 ### Property 3: CFN 파라미터 키 호환성
 
