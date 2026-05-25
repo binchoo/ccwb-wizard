@@ -1,0 +1,327 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Claude Code Bedrock-native logging stack. Replaces the OTEL pipeline (otel-collector +
+  ECS Fargate + ALB + Firehose + Glue + Athena) with Amazon Bedrock model invocation logging.
+  User attribution flows through ANTHROPIC_CUSTOM_HEADERS injected by credential-process at
+  install time, surfaced in $.requestMetadata.* fields of each invocation log entry.
+
+Parameters:
+  ProfileName:
+    Type: String
+    Description: ccwb profile name; used as a tag and for resource naming.
+
+  BedrockLoggingDestination:
+    Type: String
+    Default: cloudwatch
+    AllowedValues:
+      - cloudwatch
+      - s3
+      - both
+    Description: >
+      Where Bedrock writes invocation logs.
+      "cloudwatch" enables only the CW Logs destination (recommended for metric filters).
+      "s3" enables only S3 (recommended for Athena historical analysis).
+      "both" writes to both targets.
+
+  DataRetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 3653
+    Description: >
+      Retention period applied to both the CloudWatch Logs group and the S3 lifecycle rule.
+
+  MetricNamespace:
+    Type: String
+    Default: ClaudeCodeBedrock
+    Description: CloudWatch metric namespace published by metric filters on the invocation log group.
+
+
+Conditions:
+  EnableCloudWatchLogs: !Or
+    - !Equals [!Ref BedrockLoggingDestination, cloudwatch]
+    - !Equals [!Ref BedrockLoggingDestination, both]
+  EnableS3Logs: !Or
+    - !Equals [!Ref BedrockLoggingDestination, s3]
+    - !Equals [!Ref BedrockLoggingDestination, both]
+
+Resources:
+  # ---------------------------------------------------------------
+  # CloudWatch Logs destination
+  # ---------------------------------------------------------------
+  InvocationLogsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: EnableCloudWatchLogs
+    Properties:
+      LogGroupName: !Sub /aws/bedrock/modelinvocations/${ProfileName}
+      RetentionInDays: !Ref DataRetentionDays
+
+  # ---------------------------------------------------------------
+  # S3 destination (long-term archive + Athena source)
+  # ---------------------------------------------------------------
+  InvocationLogsBucket:
+    Type: AWS::S3::Bucket
+    Condition: EnableS3Logs
+    Properties:
+      BucketName: !Sub ccwb-bedrock-logs-${AWS::AccountId}-${AWS::Region}-${ProfileName}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-after-retention
+            Status: Enabled
+            ExpirationInDays: !Ref DataRetentionDays
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+
+  # ---------------------------------------------------------------
+  # IAM role assumed by Bedrock service to write logs
+  # ---------------------------------------------------------------
+  BedrockLoggingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProfileName}-bedrock-logging-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:*
+      Policies:
+        - !If
+          - EnableCloudWatchLogs
+          - PolicyName: WriteCloudWatchLogs
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !GetAtt InvocationLogsLogGroup.Arn
+          - !Ref AWS::NoValue
+        - !If
+          - EnableS3Logs
+          - PolicyName: WriteS3Logs
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - s3:PutObject
+                  Resource: !Sub ${InvocationLogsBucket.Arn}/AWSLogs/${AWS::AccountId}/BedrockModelInvocationLogs/*
+                  Condition:
+                    StringEquals:
+                      s3:x-amz-acl: bucket-owner-full-control
+          - !Ref AWS::NoValue
+
+
+  # ---------------------------------------------------------------
+  # Custom resource: enable Bedrock model invocation logging
+  # (no native CloudFormation resource type as of 2026-05).
+  # See lambda-functions/bedrock_logging_config/index.py for handler.
+  # ---------------------------------------------------------------
+  EnableLoggingFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ManageBedrockLogging
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:GetModelInvocationLoggingConfiguration
+                  - bedrock:PutModelInvocationLoggingConfiguration
+                  - bedrock:DeleteModelInvocationLoggingConfiguration
+                Resource: '*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt BedrockLoggingRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: bedrock.amazonaws.com
+
+  EnableLoggingFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${ProfileName}-bedrock-logging-config
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 60
+      Role: !GetAtt EnableLoggingFunctionRole.Arn
+      Code:
+        ZipFile: |
+          # placeholder — replaced at deploy time by lambda-functions/bedrock_logging_config/index.py
+          def handler(event, context):
+              raise NotImplementedError("packaged code expected")
+
+  EnableLoggingCustomResource:
+    Type: Custom::BedrockModelInvocationLogging
+    DependsOn:
+      - BedrockLoggingRole
+    Properties:
+      ServiceToken: !GetAtt EnableLoggingFunction.Arn
+      Destination: !Ref BedrockLoggingDestination
+      RoleArn: !GetAtt BedrockLoggingRole.Arn
+      LogGroupName: !If [EnableCloudWatchLogs, !Ref InvocationLogsLogGroup, !Ref AWS::NoValue]
+      S3BucketName: !If [EnableS3Logs, !Ref InvocationLogsBucket, !Ref AWS::NoValue]
+      EmbedTextToggles:
+        ImageDataDeliveryEnabled: false
+        TextDataDeliveryEnabled: true
+        EmbeddingDataDeliveryEnabled: false
+        VideoDataDeliveryEnabled: false
+
+
+  # ---------------------------------------------------------------
+  # Metric filters — extract per-user/team token counts from logs.
+  # CloudWatch metric filters require a CW Logs destination; if logging is
+  # configured as S3-only, use Athena queries instead (see Outputs).
+  # ---------------------------------------------------------------
+  InputTokensByUserMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: EnableCloudWatchLogs
+    Properties:
+      LogGroupName: !Ref InvocationLogsLogGroup
+      FilterName: !Sub ${ProfileName}-input-tokens-by-user
+      FilterPattern: '{ ($.requestMetadata.user = "*") && ($.input.inputTokenCount = *) }'
+      MetricTransformations:
+        - MetricName: InputTokensByUser
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: $.input.inputTokenCount
+          Unit: Count
+          Dimensions:
+            - Key: User
+              Value: $.requestMetadata.user
+            - Key: Team
+              Value: $.requestMetadata.team
+            - Key: ModelId
+              Value: $.modelId
+
+  OutputTokensByUserMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: EnableCloudWatchLogs
+    Properties:
+      LogGroupName: !Ref InvocationLogsLogGroup
+      FilterName: !Sub ${ProfileName}-output-tokens-by-user
+      FilterPattern: '{ ($.requestMetadata.user = "*") && ($.output.outputTokenCount = *) }'
+      MetricTransformations:
+        - MetricName: OutputTokensByUser
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: $.output.outputTokenCount
+          Unit: Count
+          Dimensions:
+            - Key: User
+              Value: $.requestMetadata.user
+            - Key: Team
+              Value: $.requestMetadata.team
+            - Key: ModelId
+              Value: $.modelId
+
+  InvocationCountMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: EnableCloudWatchLogs
+    Properties:
+      LogGroupName: !Ref InvocationLogsLogGroup
+      FilterName: !Sub ${ProfileName}-invocation-count
+      FilterPattern: '{ ($.requestMetadata.user = "*") }'
+      MetricTransformations:
+        - MetricName: InvocationCount
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: '1'
+          Unit: Count
+          Dimensions:
+            - Key: User
+              Value: $.requestMetadata.user
+            - Key: Team
+              Value: $.requestMetadata.team
+            - Key: ModelId
+              Value: $.modelId
+
+  # Untagged-call ratio: catches invocations with no requestMetadata block
+  # (users who skipped install.sh or env clobbered ANTHROPIC_CUSTOM_HEADERS).
+  UntaggedInvocationMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: EnableCloudWatchLogs
+    Properties:
+      LogGroupName: !Ref InvocationLogsLogGroup
+      FilterName: !Sub ${ProfileName}-untagged-invocations
+      FilterPattern: '{ $.requestMetadata NOT EXISTS }'
+      MetricTransformations:
+        - MetricName: UntaggedInvocations
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: '1'
+          Unit: Count
+
+
+  # ---------------------------------------------------------------
+  # Athena workgroup for historical analysis (S3 path only).
+  # Pre-created to give analysts a stable namespace; queries are added separately
+  # via logs-insights-queries.yaml-style stack in a follow-up task.
+  # ---------------------------------------------------------------
+  AthenaWorkgroup:
+    Type: AWS::Athena::WorkGroup
+    Condition: EnableS3Logs
+    Properties:
+      Name: !Sub ${ProfileName}-bedrock-logs
+      Description: Workgroup for querying Bedrock model invocation logs.
+      State: ENABLED
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        PublishCloudWatchMetricsEnabled: true
+        ResultConfiguration:
+          OutputLocation: !Sub s3://${InvocationLogsBucket}/athena-results/
+
+Outputs:
+  LogGroupName:
+    Condition: EnableCloudWatchLogs
+    Value: !Ref InvocationLogsLogGroup
+    Description: CloudWatch Logs group receiving Bedrock model invocation logs.
+    Export:
+      Name: !Sub ${AWS::StackName}-LogGroupName
+
+  S3BucketName:
+    Condition: EnableS3Logs
+    Value: !Ref InvocationLogsBucket
+    Description: S3 bucket receiving Bedrock model invocation logs.
+    Export:
+      Name: !Sub ${AWS::StackName}-S3BucketName
+
+  MetricNamespace:
+    Value: !Ref MetricNamespace
+    Description: CloudWatch metric namespace populated by metric filters.
+    Export:
+      Name: !Sub ${AWS::StackName}-MetricNamespace
+
+  BedrockLoggingRoleArn:
+    Value: !GetAtt BedrockLoggingRole.Arn
+    Description: IAM role assumed by Bedrock to write logs.
+    Export:
+      Name: !Sub ${AWS::StackName}-BedrockLoggingRoleArn
+
+  AthenaWorkgroupName:
+    Condition: EnableS3Logs
+    Value: !Ref AthenaWorkgroup
+    Description: Athena workgroup for historical Bedrock log queries.
+    Export:
+      Name: !Sub ${AWS::StackName}-AthenaWorkgroupName

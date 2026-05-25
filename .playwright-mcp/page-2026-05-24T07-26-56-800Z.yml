@@ -1,0 +1,171 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - heading "Claude Code on Bedrock — Architecture" [level=1] [ref=e5]
+    - generic [ref=e6]: Vite + React + xyflow
+    - generic [ref=e7]:
+      - button "1. Admin · 배포 산출물 생성" [active] [ref=e8] [cursor=pointer]
+      - button "2. User · Installer 로컬 구성" [ref=e9] [cursor=pointer]
+  - main [ref=e10]:
+    - application [ref=e542]:
+      - generic [ref=e544]:
+        - generic:
+          - generic:
+            - img
+            - img:
+              - group "Edge from admin-cli to auth-oidc-provider" [ref=e545] [cursor=pointer]:
+                - generic [ref=e548]:
+                  - generic: ccwb deploy auth
+            - img:
+              - group "Edge from admin-cli to build-codebuild" [ref=e550] [cursor=pointer]:
+                - generic [ref=e553]:
+                  - generic: ccwb deploy build (Win 한정)
+            - img:
+              - group "Edge from admin-cli to mc-ecs" [ref=e555] [cursor=pointer]:
+                - generic [ref=e558]:
+                  - generic: ccwb deploy monitoring (central)
+            - img:
+              - group "Edge from admin-cli to ms-cw" [ref=e560] [cursor=pointer]:
+                - generic [ref=e563]:
+                  - generic: ccwb deploy monitoring (sidecar) — 대시보드만
+            - img:
+              - group "Edge from auth-idp to auth-oidc-provider" [ref=e565] [cursor=pointer]:
+                - generic [ref=e566]:
+                  - generic: issuer URL · thumbprint
+            - img:
+              - group "Edge from auth-oidc-provider to auth-iam-role" [ref=e568] [cursor=pointer]:
+                - generic [ref=e569]:
+                  - generic: AssumeRoleWithWebIdentity 신뢰
+            - img:
+              - group "Edge from build-codebuild to dist-s3" [ref=e571] [cursor=pointer]:
+                - generic [ref=e572]:
+                  - generic: Win exe upload
+            - img:
+              - group "Edge from admin-cli to dist-s3" [ref=e574] [cursor=pointer]:
+                - generic [ref=e577]:
+                  - generic: ccwb package → upload (Mac/Linux)
+            - img:
+              - group "Edge from dist-s3 to dist-landing" [ref=e579] [cursor=pointer]:
+                - generic [ref=e582]:
+                  - generic: origin
+            - img:
+              - group "Edge from dist-s3 to artifact-zip" [ref=e584] [cursor=pointer]:
+                - generic [ref=e587]:
+                  - generic: ccwb distribute → presigned URL
+            - img:
+              - group "Edge from dist-landing to artifact-zip" [ref=e589] [cursor=pointer]:
+                - generic [ref=e592]:
+                  - generic: self-service download
+            - img:
+              - group "Edge from mc-vpc to mc-ecs" [ref=e594] [cursor=pointer]:
+                - generic [ref=e595]:
+                  - generic: OTLP/HTTP
+            - img:
+              - group "Edge from mc-ecs to mc-cw" [ref=e597] [cursor=pointer]:
+                - generic [ref=e598]:
+                  - generic: EMF + Metrics
+            - img:
+              - group "Edge from mc-ecs to mc-analytics" [ref=e600] [cursor=pointer]:
+                - generic [ref=e603]:
+                  - generic: Firehose
+          - generic:
+            - group [ref=e605]:
+              - generic [ref=e607]: Admin 로컬 (Mac/Win/Linux)
+            - group [ref=e608]:
+              - generic [ref=e610]: AWS Account (Commercial 또는 GovCloud)
+            - group:
+              - generic:
+                - generic: 관제 — Central Collector (옵션)
+            - group:
+              - generic:
+                - generic: 관제 — Sidecar Mode (대시보드만 AWS 측)
+            - group [ref=e611]:
+              - generic [ref=e612]:
+                - generic [ref=e617]: IT Admin
+                - generic [ref=e618]: ccwb CLI 운영자
+                - generic [ref=e619]: PERSONA
+            - group [ref=e620]:
+              - generic [ref=e621]:
+                - generic [ref=e626]: ccwb CLI
+                - generic [ref=e627]: init → configure → deploy → package → distribute
+                - generic [ref=e628]: PYTHON
+            - group [ref=e629]:
+              - generic [ref=e630]:
+                - generic [ref=e635]: CFN Templates
+                - generic [ref=e636]: auth / build / monitoring / analytics
+                - generic [ref=e637]: CLOUDFORMATION
+            - group [ref=e638]:
+              - generic [ref=e639]:
+                - generic [ref=e644]: External OIDC IdP
+                - generic [ref=e645]: Okta / Entra ID / Auth0 / Cognito UP
+                - generic [ref=e646]: IDP
+            - group [ref=e647]:
+              - generic [ref=e648]:
+                - generic [ref=e655]: IAM OIDC Provider
+                - generic [ref=e656]: 발급자 thumbprint 등록
+                - generic [ref=e657]: IAM
+            - group [ref=e658]:
+              - generic [ref=e659]:
+                - generic [ref=e664]: IAM Role
+                - generic [ref=e665]: Bedrock InvokeModel + sts:TagSession
+                - generic [ref=e666]: IAM ROLE
+            - group [ref=e667]:
+              - generic [ref=e668]:
+                - generic [ref=e675]: AWS CodeBuild
+                - generic [ref=e676]: Windows Nuitka 빌드 (옵션)
+                - generic [ref=e677]: BUILD
+            - group [ref=e678]:
+              - generic [ref=e679]:
+                - generic [ref=e686]: S3 — Distribution Bucket
+                - generic [ref=e687]: Presigned URL 발급
+                - generic [ref=e688]: S3
+            - group [ref=e689]:
+              - generic [ref=e690]:
+                - generic [ref=e695]: Landing Page (옵션)
+                - generic [ref=e696]: IdP 인증 + Self-service 다운로드
+                - generic [ref=e697]: CLOUDFRONT
+            - group [ref=e698]:
+              - generic [ref=e699]:
+                - generic [ref=e704]: VPC + ALB
+                - generic [ref=e705]: OTLP 수신 + JWT Authorizer
+                - generic [ref=e706]: NETWORK
+            - group [ref=e707]:
+              - generic [ref=e708]:
+                - generic [ref=e713]: ECS Fargate
+                - generic [ref=e714]: OTEL Collector (recv→proc→exp)
+                - generic [ref=e715]: ECS
+            - group [ref=e716]:
+              - generic [ref=e717]:
+                - generic [ref=e722]: CloudWatch
+                - generic [ref=e723]: EMF Logs + Metrics + Dashboard
+                - generic [ref=e724]: CW
+            - group [ref=e725]:
+              - generic [ref=e726]:
+                - generic [ref=e733]: Firehose → S3 → Glue/Athena
+                - generic [ref=e734]: 히스토리컬 SQL 분석 (옵션)
+                - generic [ref=e735]: ANALYTICS
+            - group [ref=e736]:
+              - generic [ref=e737]:
+                - generic [ref=e744]: CloudWatch Metrics + Dashboard
+                - generic [ref=e745]: 서버 인프라 없음. Sidecar가 SigV4로 직접 push
+                - generic [ref=e746]: CW
+            - group [ref=e747]:
+              - generic [ref=e748]:
+                - generic [ref=e753]: claude-code-package.zip
+                - generic [ref=e754]: credential-process · otel-helper · otelcol(sidecar) · settings.json · install.sh
+                - generic [ref=e755]: DELIVERABLE
+      - img
+      - generic "Control Panel" [ref=e756]:
+        - button "Zoom In" [ref=e757] [cursor=pointer]:
+          - img [ref=e758]
+        - button "Zoom Out" [ref=e760] [cursor=pointer]:
+          - img [ref=e761]
+        - button "Fit View" [ref=e763] [cursor=pointer]:
+          - img [ref=e764]
+      - img "Mini Map" [ref=e767]
+    - generic [ref=e769]:
+      - heading "범례 — Admin Deployment" [level=4] [ref=e770]
+      - generic [ref=e773]: ccwb CLI 제어 흐름 (배포 명령)
+      - generic [ref=e776]: 빌드/패키징 흐름
+      - generic [ref=e779]: IAM 신뢰 관계
+      - generic [ref=e782]: 관제 데이터 흐름 (OTLP/EMF)
+      - generic [ref=e785]: 산출물(zip) 배포

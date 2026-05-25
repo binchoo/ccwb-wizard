@@ -4,13 +4,9 @@
 import json
 import boto3
 import os
-import urllib.request
-import urllib.parse
 from datetime import datetime, timezone
 from decimal import Decimal
 from boto3.dynamodb.conditions import Key, Attr
-from botocore.auth import SigV4Auth
-from botocore.awsrequest import AWSRequest
 
 # Initialize clients
 dynamodb = boto3.resource("dynamodb")
@@ -32,78 +28,147 @@ WARNING_THRESHOLD_90 = int(os.environ.get("WARNING_THRESHOLD_90", "270000000"))
 quota_table = dynamodb.Table(QUOTA_TABLE)
 policies_table = dynamodb.Table(POLICIES_TABLE) if POLICIES_TABLE else None
 
-# PromQL endpoint
-PROMQL_ENDPOINT = f"https://monitoring.{METRICS_REGION}.amazonaws.com/api/v1/query"
-
-
-def _promql_query(query, time_param=None):
-    """Execute a PromQL instant query against CloudWatch Prometheus-compatible API with SigV4."""
-    data = urllib.parse.urlencode({"query": query})
-    if time_param:
-        data += f"&time={time_param}"
-    url = PROMQL_ENDPOINT
-
-    request = AWSRequest(
-        method="POST", url=url,
-        data=data.encode("utf-8"),
-        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
-    )
-    credentials = boto3.Session().get_credentials().get_frozen_credentials()
-    SigV4Auth(credentials, "monitoring", METRICS_REGION).add_auth(request)
-
-    req = urllib.request.Request(url, data=data.encode("utf-8"), headers=dict(request.headers), method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            result = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()[:500]
-        print(f"[DEBUG] HTTP {e.code}: {body}")
-        raise
-
-    if result.get("status") != "success":
-        raise RuntimeError(f"PromQL query failed: {result}")
-    return result["data"].get("result", [])
-
 
 AGGREGATION_WINDOW = 900  # 15 minutes in seconds (matches EventBridge schedule)
 
+# CloudWatch metric namespace populated by bedrock-logging stack metric filters.
+# (Replaces the OTEL-based PromQL data source as of v3.0.)
+METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "ClaudeCodeBedrock")
 
-def fetch_usage_from_promql():
-    """Query PromQL for per-user token usage in the last aggregation window only."""
-    window = AGGREGATION_WINDOW
+cloudwatch_client = boto3.client("cloudwatch", region_name=METRICS_REGION)
 
-    # Delta tokens per user in the last window
-    results = _promql_query(
-        f'sum by ("user.email")(increase({{"claude_code.token.usage"}}[{window}s]))'
-    )
 
-    # Delta token type breakdown per user
-    type_results = _promql_query(
-        f'sum by ("user.email", type)(increase({{"claude_code.token.usage"}}[{window}s]))'
-    )
+def _list_known_users() -> list[str]:
+    """Discover users to query by scanning the UserQuotaMetrics table.
 
-    users = {}
-    for r in results:
-        email = r["metric"].get("user.email", "")
-        val = float(r["value"][1])
-        if email and val > 0:
-            users[email] = {"total_tokens": val}
+    GetMetricData requires us to enumerate dimension values up front — there's no
+    "give me all values for the User dimension" API. We use the DynamoDB table as
+    the source of truth for who exists, since first-time users won't be in any
+    metric filter result anyway.
 
-    for r in type_results:
-        email = r["metric"].get("user.email", "")
-        token_type = r["metric"].get("type", "")
-        val = float(r["value"][1])
-        if email and val > 0:
-            u = users.setdefault(email, {})
-            if token_type == "input":
-                u["input_tokens"] = val
-            elif token_type == "output":
-                u["output_tokens"] = val
-            elif token_type in ("cache_read", "cacheRead"):
-                u["cache_tokens"] = val
+    For very fresh deployments with empty DynamoDB this returns []. The first
+    invocation that creates the user record will become discoverable on the
+    next quota_monitor run (15 min cadence) — acceptable lag.
+    """
+    seen: set[str] = set()
+    try:
+        # Scan rather than Query because we want unique users across all months.
+        # Cardinality is bounded by user count (PoC scale), and projection trims payload.
+        kwargs = {"ProjectionExpression": "email"}
+        while True:
+            resp = quota_table.scan(**kwargs)
+            for item in resp.get("Items", []):
+                email = item.get("email")
+                if email:
+                    seen.add(email)
+            if "LastEvaluatedKey" not in resp:
+                break
+            kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+    except Exception as e:
+        print(f"[WARN] Failed to enumerate users from DynamoDB: {e}")
+    return sorted(seen)
 
-    print(f"Fetched delta usage for {len(users)} users from PromQL ({window}s window)")
+
+def _chunked(seq, size):
+    """Yield successive chunks of ``size`` from ``seq``."""
+    for i in range(0, len(seq), size):
+        yield seq[i : i + size]
+
+
+def fetch_usage_from_cloudwatch():
+    """Fetch per-user token usage from CloudWatch Custom Metrics.
+
+    Replaces the v2.x PromQL data path. The bedrock-logging stack defines metric
+    filters on Bedrock model invocation logs that emit ``InputTokensByUser`` and
+    ``OutputTokensByUser`` to the ``ClaudeCodeBedrock`` namespace, with a ``User``
+    dimension matching ``$.requestMetadata.user``.
+
+    Returns a dict shaped exactly like the old PromQL function so callers don't change:
+
+        {
+          "alice@example.com": {
+            "total_tokens": 1234,
+            "input_tokens": 1000,
+            "output_tokens": 234,
+          },
+          ...
+        }
+    """
+    users_list = _list_known_users()
+    if not users_list:
+        print("No users discovered yet; skipping CloudWatch fetch.")
+        return {}
+
+    end = datetime.now(timezone.utc)
+    start = end - __import__("datetime").timedelta(seconds=AGGREGATION_WINDOW)
+
+    # GetMetricData allows max 500 queries per call, but each user contributes 2
+    # (input + output), so chunk to 250 users per batch.
+    users: dict[str, dict] = {}
+
+    for batch in _chunked(users_list, 250):
+        queries = []
+        for i, email in enumerate(batch):
+            queries.append({
+                "Id": f"in_{i}",
+                "Label": email,
+                "MetricStat": {
+                    "Metric": {
+                        "Namespace": METRIC_NAMESPACE,
+                        "MetricName": "InputTokensByUser",
+                        "Dimensions": [{"Name": "User", "Value": email}],
+                    },
+                    "Period": AGGREGATION_WINDOW,
+                    "Stat": "Sum",
+                },
+                "ReturnData": True,
+            })
+            queries.append({
+                "Id": f"out_{i}",
+                "Label": email,
+                "MetricStat": {
+                    "Metric": {
+                        "Namespace": METRIC_NAMESPACE,
+                        "MetricName": "OutputTokensByUser",
+                        "Dimensions": [{"Name": "User", "Value": email}],
+                    },
+                    "Period": AGGREGATION_WINDOW,
+                    "Stat": "Sum",
+                },
+                "ReturnData": True,
+            })
+
+        try:
+            resp = cloudwatch_client.get_metric_data(
+                MetricDataQueries=queries, StartTime=start, EndTime=end,
+            )
+        except Exception as e:
+            print(f"[ERROR] GetMetricData failed for batch of {len(batch)}: {e}")
+            continue
+
+        # Map results back to users.  Each query Id encodes its index and direction.
+        for r in resp.get("MetricDataResults", []):
+            qid = r["Id"]
+            email = r.get("Label", "")
+            values = r.get("Values", [])
+            total = sum(float(v) for v in values)
+            if total <= 0 or not email:
+                continue
+            entry = users.setdefault(email, {"total_tokens": 0.0})
+            if qid.startswith("in_"):
+                entry["input_tokens"] = entry.get("input_tokens", 0.0) + total
+            elif qid.startswith("out_"):
+                entry["output_tokens"] = entry.get("output_tokens", 0.0) + total
+            entry["total_tokens"] = entry.get("input_tokens", 0.0) + entry.get("output_tokens", 0.0)
+
+    print(f"Fetched delta usage for {len(users)} users from CloudWatch ({AGGREGATION_WINDOW}s window)")
     return users
+
+
+# Back-compat alias: the rest of this module still calls fetch_usage_from_promql.
+# Pointing the alias at the new function lets us swap data sources without
+# touching the lambda_handler / update_quota_metrics call sites.
+fetch_usage_from_promql = fetch_usage_from_cloudwatch
 
 
 def update_quota_metrics(usage_data):

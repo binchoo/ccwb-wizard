@@ -27,7 +27,6 @@ from claude_code_with_bedrock.models import (
 
 # Runtime packages bundled into the credential provider binary.
 _CREDENTIAL_PROVIDER_RUNTIME_DEPS = ["boto3", "requests", "PyJWT", "keyring", "cryptography"]
-_OTEL_HELPER_RUNTIME_DEPS: list[str] = []  # otel_helper uses only stdlib
 _PYINSTALLER_PIN = "pyinstaller==6.*"
 
 
@@ -366,6 +365,8 @@ class PackageCommand(Command):
         # 2. Failed builds - should error out
         requested_platforms = platforms_to_build.copy()
         built_executables = []
+        # built_otel_helpers list retained as empty for downstream code paths that
+        # still iterate it (kept until those call sites are simplified in a later task).
         built_otel_helpers = []
 
         console.print()
@@ -384,38 +385,10 @@ class PackageCommand(Command):
             except Exception as e:
                 console.print(f"[yellow]Warning: Could not build credential process for {platform_name}: {e}[/yellow]")
 
-            # Build OTEL helper if monitoring is enabled
-            if profile.monitoring_enabled:
-                # Skip OTEL helper for Windows if being built in CodeBuild
-                if platform_name == "windows" and executable_path is None:
-                    console.print("[dim]Windows OTEL helper will be built in CodeBuild[/dim]")
-                else:
-                    console.print(f"[cyan]Building OTEL helper for {platform_name}...[/cyan]")
-                    try:
-                        otel_helper_path = self._build_otel_helper(output_dir, platform_name)
-                        # Only add to list if build was successful (not None)
-                        if otel_helper_path is not None:
-                            built_otel_helpers.append((platform_name, otel_helper_path))
-                    except Exception as e:
-                        console.print(f"[yellow]Warning: Could not build OTEL helper for {platform_name}: {e}[/yellow]")
-
-        # Build OTEL Collector sidecar if sidecar mode
-        if profile.monitoring_enabled and getattr(profile, "monitoring_mode", "central") == "sidecar":
-            console.print("\n[cyan]Building OTEL Collector sidecar...[/cyan]")
-            try:
-                self._build_otelcol(output_dir, platforms_to_build)
-                # Copy and template collector-config.yaml
-                import shutil as _shutil_col
-
-                config_src = Path(__file__).parent.parent.parent.parent / "otel_helper" / "collector-config.yaml"
-                config_dst = output_dir / "collector-config.yaml"
-                _shutil_col.copy2(config_src, config_dst)
-                text = config_dst.read_text().replace("${REGION}", profile.aws_region)
-                config_dst.write_text(text)
-                console.print("[green]✓ Collector config templated[/green]")
-            except Exception as e:
-                console.print(f"[yellow]Warning: Could not build OTEL Collector sidecar: {e}[/yellow]")
-                console.print("[dim]Metrics will not be sent to CloudWatch without the collector.[/dim]")
+        # OTEL helper / collector builds removed in v3.0.
+        # User attribution now flows through ANTHROPIC_CUSTOM_HEADERS injected
+        # at install time by `credential-process --get-bedrock-metadata-headers`,
+        # which the credential-process binary already provides — no separate helper.
 
         # Track whether Windows build was submitted to CodeBuild
         windows_codebuild_pending = any(
@@ -452,16 +425,7 @@ class PackageCommand(Command):
             output_dir, profile, built_executables, built_otel_helpers, has_windows_codebuild=windows_codebuild_pending
         )
 
-        # Copy shell wrapper for OTEL helper (Layer 2 caching - avoids PyInstaller startup)
-        if built_otel_helpers:
-            import shutil as _shutil
-
-            shell_wrapper_src = Path(__file__).parent.parent.parent.parent / "otel_helper" / "otel-helper.sh"
-            if shell_wrapper_src.exists():
-                shell_wrapper_dst = output_dir / "otel-helper.sh"
-                _shutil.copy2(shell_wrapper_src, shell_wrapper_dst)
-                shell_wrapper_dst.chmod(0o755)
-                console.print("[green]✓ OTEL helper shell wrapper included[/green]")
+        # OTEL helper shell wrapper removed in v3.0.
 
         # Create documentation
         console.print("[cyan]Creating documentation...[/cyan]")
@@ -493,13 +457,7 @@ class PackageCommand(Command):
             console.print("  • install.bat - Installation script for Windows")
         console.print("  • README.md - Installation instructions")
         if profile.monitoring_enabled and (output_dir / "claude-settings" / "settings.json").exists():
-            console.print("  • claude-settings/settings.json - Claude Code telemetry settings")
-            for platform_name, otel_helper_path in built_otel_helpers:
-                console.print(f"  • {otel_helper_path.name} - OTEL helper executable for {platform_name}")
-            if (output_dir / "collector-config.yaml").exists():
-                console.print("  • collector-config.yaml - OTEL Collector sidecar configuration")
-            for f in sorted(output_dir.glob("otelcol-*")):
-                console.print(f"  • {f.name} - OTEL Collector sidecar binary")
+            console.print("  • claude-settings/settings.json - Claude Code Bedrock settings (with metadata header)")
         if profile.cowork_3p_enabled:
             if (output_dir / "cowork-3p-config.json").exists():
                 console.print("  • cowork-3p-config.json - CoWork 3P MDM configuration (JSON)")
@@ -1184,708 +1142,6 @@ RUN pyinstaller \
                 subprocess.run(["docker", "rm", container_name], capture_output=True)
                 subprocess.run(["docker", "rmi", image_tag], capture_output=True)
 
-    def _build_linux_otel_helper_via_docker(self, output_dir: Path, arch: str = "x64") -> Path:
-        """Build Linux OTEL helper binary using Docker with PyInstaller."""
-        import shutil
-        import tempfile
-
-        console = Console()
-        verbose = self.option("build-verbose")
-
-        # Determine platform and binary name
-        if arch == "arm64":
-            docker_platform = "linux/arm64"
-            binary_name = "otel-helper-linux-arm64"
-        else:
-            docker_platform = "linux/amd64"
-            binary_name = "otel-helper-linux-x64"
-
-        # Check if Docker is available and running
-        try:
-            docker_check = subprocess.run(["docker", "--version"], capture_output=True)
-            docker_installed = docker_check.returncode == 0
-        except FileNotFoundError:
-            docker_installed = False
-        if not docker_installed:
-            console.print(f"\n[yellow]⚠️  Docker not found - skipping Linux {arch} OTEL helper build[/yellow]")
-            console.print("[dim]Linux binaries require Docker Desktop to be installed and running.[/dim]")
-            console.print(f"[dim]Skipping otel-helper-linux-{arch}[/dim]\n")
-            # Return a dummy path that won't be included in the package
-            return None
-
-        # Check if Docker daemon is running
-        daemon_check = subprocess.run(["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if daemon_check.returncode != 0:
-            console.print(f"\n[yellow]⚠️  Docker daemon not running - skipping Linux {arch} OTEL helper build[/yellow]")
-            console.print("[dim]Please start Docker Desktop and try again.[/dim]")
-            console.print(f"[dim]Skipping otel-helper-linux-{arch}[/dim]\n")
-            # Return a dummy path that won't be included in the package
-            return None
-
-        # Create a temporary directory for the Docker build
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-
-            # Copy source files to temp directory
-            source_dir = Path(__file__).parent.parent.parent.parent
-            shutil.copytree(source_dir / "otel_helper", temp_path / "otel_helper")
-
-            # Create Dockerfile for OTEL helper with PyInstaller
-            dockerfile_content = f"""FROM --platform={docker_platform} ubuntu:22.04
-
-# Set non-interactive to avoid tzdata prompts
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=UTC
-
-# Install Python 3.12 and build dependencies
-RUN apt-get update && apt-get install -y \
-    software-properties-common \
-    build-essential \
-    binutils \
-    curl \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update \
-    && apt-get install -y python3.12 python3.12-dev python3.12-venv \
-    && python3.12 -m ensurepip \
-    && python3.12 -m pip install --upgrade pip \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set Python 3.12 as default python3
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
-
-# Install Python packages
-RUN python3 -m pip install --no-cache-dir \
-    pyinstaller==6.3.0 \
-    PyJWT \
-    cryptography \
-    six
-
-# Set working directory
-WORKDIR /build
-
-# Copy source code
-COPY otel_helper /build/otel_helper
-
-# Build the binary with PyInstaller
-RUN pyinstaller \
-    --onefile \
-    --clean \
-    --noconfirm \
-    --name {binary_name} \
-    --distpath /output \
-    --workpath /tmp/build \
-    --specpath /tmp \
-    --log-level WARN \
-    --hidden-import six \
-    --hidden-import six.moves \
-    otel_helper/__main__.py
-
-# The binary will be in /output/{binary_name}
-"""
-
-            (temp_path / "Dockerfile").write_text(dockerfile_content)
-
-            # Generate unique image tag to avoid reusing cached images
-            import time
-
-            image_tag = f"ccwb-otel-{arch}-builder-{int(time.time())}"
-
-            # Remove any existing image with similar name to ensure fresh build
-            if verbose:
-                console.print("[dim]Cleaning up old Docker images...[/dim]")
-            subprocess.run(
-                ["docker", "rmi", "-f", f"ccwb-otel-{arch}-builder"],
-                capture_output=True,
-            )
-
-            # Build Docker image
-            console.print(f"[yellow]Building Linux {arch} OTEL helper via Docker...[/yellow]")
-            if verbose:
-                console.print("[dim]Docker build output:[/dim]")
-            build_result = subprocess.run(
-                [
-                    "docker",
-                    "buildx",
-                    "build",
-                    "--no-cache",
-                    "--platform",
-                    docker_platform,
-                    "-t",
-                    image_tag,
-                    "--load",
-                    ".",
-                ],
-                cwd=temp_path,
-                capture_output=not verbose,
-                text=True,
-            )
-
-            if build_result.returncode != 0:
-                raise RuntimeError(f"Docker build failed for OTEL helper: {build_result.stderr}")
-
-            # Run container and copy binary out
-            import time
-
-            container_name = f"ccwb-otel-extract-{arch}-{int(time.time())}"
-
-            # Create container from the newly built image
-            run_result = subprocess.run(
-                ["docker", "create", "--name", container_name, image_tag],
-                capture_output=True,
-                text=True,
-            )
-
-            if run_result.returncode != 0:
-                raise RuntimeError(f"Failed to create container: {run_result.stderr}")
-
-            try:
-                # Copy binary from container
-                copy_result = subprocess.run(
-                    ["docker", "cp", f"{container_name}:/output/{binary_name}", str(output_dir)],
-                    capture_output=True,
-                    text=True,
-                )
-
-                if copy_result.returncode != 0:
-                    raise RuntimeError(f"Failed to copy OTEL binary from container: {copy_result.stderr}")
-
-                # Verify the binary was created
-                binary_path = output_dir / binary_name
-                if not binary_path.exists():
-                    raise RuntimeError(f"Linux {arch} OTEL helper binary was not created successfully")
-
-                # Make it executable
-                binary_path.chmod(0o755)
-
-                console.print(f"[green]✓ Linux {arch} OTEL helper built successfully via Docker[/green]")
-                return binary_path
-
-            finally:
-                # Clean up container and image
-                subprocess.run(["docker", "rm", container_name], capture_output=True)
-                subprocess.run(["docker", "rmi", image_tag], capture_output=True)
-
-    def _build_windows_via_codebuild(self, output_dir: Path) -> Path:
-        """Build Windows binaries using AWS CodeBuild."""
-        import json
-
-        import boto3
-        from botocore.exceptions import ClientError
-
-        console = Console()
-
-        # Check for in-progress builds only (not completed ones)
-        try:
-            config = Config.load()
-            profile_name = self.option("profile")
-            profile = config.get_profile(profile_name)
-
-            if profile:
-                project_name = f"{profile.identity_pool_name}-windows-build"
-                codebuild = boto3.client("codebuild", region_name=profile.aws_region)
-
-                # List recent builds
-                response = codebuild.list_builds_for_project(projectName=project_name, sortOrder="DESCENDING")
-
-                if response.get("ids"):
-                    # Check only the most recent builds
-                    build_ids = response["ids"][:3]
-                    builds_response = codebuild.batch_get_builds(ids=build_ids)
-
-                    for build in builds_response.get("builds", []):
-                        if build["buildStatus"] == "IN_PROGRESS":
-                            console.print(
-                                f"[yellow]Windows build already in progress (started "
-                                f"{build['startTime'].strftime('%Y-%m-%d %H:%M')})[/yellow]"
-                            )
-                            console.print("Check status: [cyan]poetry run ccwb builds[/cyan]")
-                            console.print("[dim]Note: Package will be created without Windows binaries[/dim]")
-                            # Don't return early - continue to create package with available binaries
-        except Exception as e:
-            console.print(f"[dim]Could not check for recent builds: {e}[/dim]")
-
-        # Load profile to get CodeBuild configuration
-        config = Config.load()
-        profile_name = self.option("profile")
-        profile = config.get_profile(profile_name)
-
-        if not profile or not profile.enable_codebuild:
-            console.print("[red]CodeBuild is not enabled for this profile.[/red]")
-            console.print("To enable CodeBuild for Windows builds:")
-            console.print("  1. Run: poetry run ccwb init")
-            console.print("  2. Answer 'Yes' when asked about Windows build support")
-            console.print("  3. Run: poetry run ccwb deploy codebuild")
-            raise RuntimeError("CodeBuild not enabled")
-
-        # Get CodeBuild stack outputs
-        stack_name = profile.stack_names.get("codebuild", f"{profile.identity_pool_name}-codebuild")
-        try:
-            stack_outputs = get_stack_outputs(stack_name, profile.aws_region)
-        except Exception:
-            console.print(f"[red]CodeBuild stack not found: {stack_name}[/red]")
-            console.print("Run: poetry run ccwb deploy codebuild")
-            raise RuntimeError("CodeBuild stack not deployed") from None
-
-        bucket_name = stack_outputs.get("BuildBucket")
-        project_name = stack_outputs.get("ProjectName")
-
-        if not bucket_name or not project_name:
-            console.print("[red]CodeBuild stack outputs not found[/red]")
-            raise RuntimeError("Invalid CodeBuild stack")
-
-        with Progress(
-            SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console
-        ) as progress:
-            # Package source code
-            task = progress.add_task("Packaging source code for CodeBuild...", total=None)
-            source_zip = self._package_source_for_codebuild()
-
-            # Upload to S3
-            progress.update(task, description="Uploading source to S3...")
-            s3 = boto3.client("s3", region_name=profile.aws_region)
-            try:
-                s3.upload_file(str(source_zip), bucket_name, "source.zip")
-            except ClientError as e:
-                console.print(f"[red]Failed to upload source: {e}[/red]")
-                raise
-
-            # Start build
-            progress.update(task, description="Starting CodeBuild project...")
-            codebuild = boto3.client("codebuild", region_name=profile.aws_region)
-            try:
-                response = codebuild.start_build(projectName=project_name)
-                build_id = response["build"]["id"]
-                build_account_id = response["build"].get("arn", "").split(":")[4]
-            except ClientError as e:
-                console.print(f"[red]Failed to start build: {e}[/red]")
-                raise
-
-            # Monitor build
-            progress.update(task, description="Building Windows binaries (20+ minutes)...")
-            console.print(f"[dim]Build ID: {build_id}[/dim]")
-
-            # Store build ID for later retrieval
-            from pathlib import Path
-
-            build_info_file = Path.home() / ".claude-code" / "latest-build.json"
-            build_info_file.parent.mkdir(exist_ok=True)
-            with open(build_info_file, "w") as f:
-                json.dump(
-                    {
-                        "build_id": build_id,
-                        "started_at": datetime.now().isoformat(),
-                        "project": project_name,
-                        "bucket": bucket_name,
-                    },
-                    f,
-                )
-
-            # Clean up source zip
-            source_zip.unlink()
-            progress.update(task, completed=True)
-
-        # Don't wait - return build info immediately
-        console.print("\n[bold yellow]Windows build started![/bold yellow]")
-        console.print(f"[dim]Build ID: {build_id}[/dim]")
-        console.print("Build will take approximately 20+ minutes to complete.")
-
-        console.print("\n[bold]Monitor build progress:[/bold]")
-        console.print("  [cyan]poetry run ccwb builds[/cyan]")
-        console.print("  This shows the current status and elapsed time")
-
-        console.print("\n[bold]Next steps:[/bold]")
-        console.print("  1. Wait for build to complete (you can continue working)")
-        console.print("  2. Run [cyan]poetry run ccwb builds[/cyan] to check completion status")
-        console.print("  3. Once complete, run [cyan]poetry run ccwb distribute[/cyan]")
-        console.print("     This will download Windows binaries and create your distribution package")
-
-        # Get profile to show distribution-specific info
-        config = Config.load()
-        profile_obj = config.get_profile(self.option("profile"))
-
-        if profile_obj and profile_obj.enable_distribution:
-            console.print("\n[dim]Note: Package will be uploaded to S3 with presigned URL or landing page[/dim]")
-        else:
-            console.print("\n[dim]Note: Package will be saved locally in the dist/ folder[/dim]")
-
-        console.print("\n[dim]View logs in AWS Console:[/dim]")
-        encoded_build_id = f"{project_name}%3A{build_id.split(':')[1]}"
-        console.print(
-            f"  [dim]https://{profile.aws_region}.console.aws.amazon.com/codesuite/codebuild/{build_account_id}/projects/{project_name}/build/{encoded_build_id}[/dim]"
-        )
-
-        # Return None since we don't have a local binary path
-        return None
-
-    def _package_source_for_codebuild(self) -> Path:
-        """Package source code for CodeBuild."""
-        import tempfile
-        import zipfile
-
-        # Create a temporary zip file
-        temp_dir = Path(tempfile.mkdtemp())
-        source_zip = temp_dir / "source.zip"
-
-        # Get the source directory (parent of package.py)
-        source_dir = Path(__file__).parents[3]  # Go up to source/ directory
-
-        with zipfile.ZipFile(source_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-            # Add all Python files from source directory
-            for py_file in source_dir.rglob("*.py"):
-                arcname = str(py_file.relative_to(source_dir.parent))
-                zf.write(py_file, arcname)
-
-            # Add pyproject.toml for dependencies
-            pyproject_file = source_dir / "pyproject.toml"
-            if pyproject_file.exists():
-                zf.write(pyproject_file, "pyproject.toml")
-
-        return source_zip
-
-    def _build_otelcol(self, output_dir: Path, platforms_to_build: list[str]) -> None:
-        """Build minimal OTEL Collector sidecar using OCB for all target platforms."""
-        import platform as platform_mod
-        import shutil
-        import urllib.request
-
-        console = Console()
-        host_os = platform_mod.system().lower()
-        host_arch = platform_mod.machine().lower()
-
-        result = subprocess.run(["go", "version"], capture_output=True, text=True)
-        if result.returncode != 0:
-            console.print("[yellow]Go not found — skipping collector build[/yellow]")
-            console.print("[dim]Install Go 1.23+ from https://go.dev/dl/ to build the collector sidecar[/dim]")
-            return
-        go_match = re.search(r"go(\d+)\.(\d+)", result.stdout)
-        if not go_match or (int(go_match.group(1)), int(go_match.group(2))) < (1, 23):
-            console.print("[yellow]Go 1.23+ required — skipping collector build[/yellow]")
-            console.print(f"[dim]Found: {result.stdout.strip()}. Install Go 1.23+ from https://go.dev/dl/[/dim]")
-            return
-
-        OCB_VERSION = "0.120.0"
-        ocb_os = "darwin" if host_os == "darwin" else "linux"
-        ocb_arch = "arm64" if host_arch in ["arm64", "aarch64"] else "amd64"
-        ocb_dir = Path.home() / ".cache" / "ocb"
-        ocb_dir.mkdir(parents=True, exist_ok=True)
-        ocb_path = ocb_dir / f"ocb_{OCB_VERSION}_{ocb_os}_{ocb_arch}"
-
-        if not ocb_path.exists():
-            url = (
-                f"https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/"
-                f"cmd%2Fbuilder%2Fv{OCB_VERSION}/ocb_{OCB_VERSION}_{ocb_os}_{ocb_arch}"
-            )
-            console.print(f"[dim]Downloading OCB v{OCB_VERSION}...[/dim]")
-            urllib.request.urlretrieve(url, ocb_path)
-            ocb_path.chmod(0o755)
-
-        manifest = Path(__file__).parent.parent.parent.parent / "otel_helper" / "ocb-manifest.yaml"
-        if not manifest.exists():
-            raise FileNotFoundError(f"OCB manifest not found: {manifest}")
-
-        all_targets = {
-            "macos-arm64": ("darwin", "arm64", "otelcol-macos-arm64"),
-            "macos-intel": ("darwin", "amd64", "otelcol-macos-intel"),
-            "macos": ("darwin", "arm64" if host_arch == "arm64" else "amd64",
-                      "otelcol-macos-arm64" if host_arch == "arm64" else "otelcol-macos-intel"),
-            "macos-universal": ("darwin", "arm64", "otelcol-macos-arm64"),
-            "linux-x64": ("linux", "amd64", "otelcol-linux-x64"),
-            "linux-arm64": ("linux", "arm64", "otelcol-linux-arm64"),
-            "linux": ("linux", "amd64", "otelcol-linux-x64"),
-            "windows": ("windows", "amd64", "otelcol-windows.exe"),
-        }
-
-        targets = []
-        seen = set()
-        for plat in platforms_to_build:
-            if plat in all_targets:
-                binary_name = all_targets[plat][2]
-                if binary_name not in seen:
-                    targets.append(all_targets[plat])
-                    seen.add(binary_name)
-
-        if not targets:
-            return
-
-        build_dir = output_dir / "_otelcol_build"
-        build_dir.mkdir(exist_ok=True)
-
-        try:
-            manifest_text = manifest.read_text().replace(
-                "output_path: ./build/otelcol", f"output_path: {build_dir}"
-            )
-            temp_manifest = build_dir / "manifest.yaml"
-            temp_manifest.write_text(manifest_text)
-
-            console.print("[dim]Generating collector source code...[/dim]")
-            result = subprocess.run(
-                [str(ocb_path), "--config", str(temp_manifest), "--skip-compilation"],
-                capture_output=True, text=True,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"OCB source generation failed: {result.stderr}")
-
-            console.print("[dim]Downloading Go modules...[/dim]")
-            dl_result = subprocess.run(
-                ["go", "mod", "download"], capture_output=True, text=True, cwd=build_dir,
-            )
-            if dl_result.returncode != 0:
-                raise RuntimeError(f"go mod download failed: {dl_result.stderr}")
-
-            for goos, goarch, binary_name in targets:
-                console.print(f"[dim]Compiling collector for {goos}/{goarch}...[/dim]")
-                output_binary = (output_dir / binary_name).resolve()
-                env = {**os.environ, "GOOS": goos, "GOARCH": goarch, "CGO_ENABLED": "0"}
-                result = subprocess.run(
-                    ["go", "build", "-trimpath", "-ldflags=-s -w", "-o", str(output_binary), "."],
-                    capture_output=True, text=True, env=env, cwd=build_dir,
-                )
-                if result.returncode != 0:
-                    console.print(f"[yellow]Warning: Failed to build {binary_name}: {result.stderr[:200]}[/yellow]")
-                    continue
-                if goos != "windows":
-                    output_binary.chmod(0o755)
-                console.print(f"[green]✓ {binary_name}[/green]")
-        finally:
-            shutil.rmtree(build_dir, ignore_errors=True)
-
-    def _build_otel_helper(self, output_dir: Path, target_platform: str) -> Path:
-        """Build executable for OTEL helper script."""
-        # Windows uses Nuitka via CodeBuild
-        if target_platform == "windows":
-            # Check if the Windows binary already exists (built by _build_executable)
-            windows_binary = output_dir / "otel-helper-windows.exe"
-            if windows_binary.exists():
-                return windows_binary
-            else:
-                # If not, we need to build via CodeBuild (but this should have been done already)
-                raise RuntimeError("Windows otel-helper should have been built with credential-process")
-
-        # macOS builds use PyInstaller
-        if target_platform == "macos-arm64":
-            return self._build_otel_helper_pyinstaller(output_dir, "macos", "arm64")
-        elif target_platform == "macos-intel":
-            return self._build_otel_helper_pyinstaller(output_dir, "macos", "x86_64")
-        elif target_platform == "macos-universal":
-            return self._build_otel_helper_pyinstaller(output_dir, "macos", "universal2")
-        elif target_platform == "macos":
-            import platform
-
-            current_machine = platform.machine().lower()
-            if current_machine == "arm64":
-                return self._build_otel_helper_pyinstaller(output_dir, "macos", "arm64")
-            else:
-                return self._build_otel_helper_pyinstaller(output_dir, "macos", "x86_64")
-
-        # Linux builds use PyInstaller via Docker
-        elif target_platform == "linux-x64":
-            return self._build_linux_otel_helper_via_docker(output_dir, "x64")
-        elif target_platform == "linux-arm64":
-            return self._build_linux_otel_helper_via_docker(output_dir, "arm64")
-        elif target_platform == "linux":
-            return self._build_otel_helper_pyinstaller(output_dir, "linux", None)
-
-        # Fallback
-        raise ValueError(f"Unsupported target platform for OTEL helper: {target_platform}")
-
-    def _build_otel_helper_pyinstaller(self, output_dir: Path, platform_name: str, arch: str | None) -> Path:
-        """Build OTEL helper using PyInstaller."""
-        import platform as platform_module
-
-        console = Console()
-        verbose = self.option("build-verbose")
-
-        # Determine binary name
-        if platform_name == "macos":
-            if arch == "arm64":
-                binary_name = "otel-helper-macos-arm64"
-            elif arch == "x86_64":
-                binary_name = "otel-helper-macos-intel"
-            elif arch == "universal2":
-                binary_name = "otel-helper-macos-universal"
-            else:
-                binary_name = "otel-helper-macos"
-        elif platform_name == "linux":
-            # Detect architecture and set appropriate binary name
-            machine = platform_module.machine().lower()
-            if machine in ["aarch64", "arm64"]:
-                binary_name = "otel-helper-linux-arm64"
-            else:
-                binary_name = "otel-helper-linux-x64"
-        else:
-            raise ValueError(f"Unsupported platform for OTEL helper: {platform_name}")
-
-        # Find the source file
-        src_file = Path(__file__).parent.parent.parent.parent / "otel_helper" / "__main__.py"
-        if not src_file.exists():
-            raise FileNotFoundError(f"OTEL helper source not found: {src_file}")
-
-        console.print(f"[yellow]Building OTEL helper for {platform_name} {arch or ''} with PyInstaller...[/yellow]")
-
-        # Determine log level based on verbose flag
-        log_level = "INFO" if verbose else "WARN"
-
-        host_arch = platform_module.machine().lower()
-        cross_arch = platform_name == "macos" and arch is not None and arch != host_arch and arch != "universal2"
-
-        # Build PyInstaller command
-        if cross_arch:
-            # Cross-arch build: need a per-arch venv seeded from a universal2 Python
-            universal2_python = _find_universal2_python()
-            if universal2_python is None:
-                console.print(f"[yellow]Warning: Skipping {binary_name} — cross-arch build requires universal2 Python (not found)[/yellow]")
-                return output_dir / binary_name
-            venv_dir = _ensure_cross_arch_venv(arch, universal2_python, _OTEL_HELPER_RUNTIME_DEPS, console)
-            work_root = Path.home() / ".ccwb" / "build-work"
-            work_root.mkdir(parents=True, exist_ok=True)
-            cmd = [
-                "/usr/bin/arch", f"-{arch}",
-                str(venv_dir / "bin" / "pyinstaller"),
-                "--onefile", "--clean", "--noconfirm",
-                f"--name={binary_name}",
-                f"--distpath={str(output_dir)}",
-                f"--workpath={str(work_root / arch)}",
-                f"--specpath={str(work_root / arch)}",
-                f"--log-level={log_level}",
-                str(src_file),
-            ]
-        else:
-            cmd = [
-                "poetry", "run", "pyinstaller",
-                "--onefile", "--clean", "--noconfirm",
-                f"--name={binary_name}",
-                f"--distpath={str(output_dir)}",
-                "--workpath=/tmp/pyinstaller",
-                "--specpath=/tmp/pyinstaller",
-                f"--log-level={log_level}",
-                str(src_file),
-            ]
-
-        # Add target architecture for macOS (only for native Poetry build)
-        if not cross_arch and platform_name == "macos" and arch:
-            cmd.insert(5, f"--target-arch={arch}")
-
-        # Run PyInstaller from source directory
-        source_dir = Path(__file__).parent.parent.parent.parent
-        result = subprocess.run(cmd, capture_output=not verbose, text=True, cwd=source_dir)
-
-        if result.returncode != 0:
-            console.print(f"[red]PyInstaller build failed for OTEL helper: {result.stderr}[/red]")
-            raise RuntimeError(f"PyInstaller build failed: {result.stderr}")
-
-        binary_path = output_dir / binary_name
-        if binary_path.exists():
-            binary_path.chmod(0o755)
-            console.print("[green]✓ OTEL helper built successfully with PyInstaller[/green]")
-            return binary_path
-        else:
-            raise RuntimeError(f"OTEL helper binary not created: {binary_path}")
-
-    def _build_native_otel_helper(self, output_dir: Path, target_platform: str) -> Path:
-        """Build OTEL helper using native Nuitka compiler."""
-        import platform
-
-        current_system = platform.system().lower()
-        current_machine = platform.machine().lower()
-
-        # Determine the binary name based on platform and architecture
-        if target_platform == "macos":
-            # Check if user requested a specific variant via environment variable
-            macos_variant = os.environ.get("CCWB_MACOS_VARIANT", "").lower()
-
-            if macos_variant == "intel":
-                platform_variant = "intel"
-                binary_name = "otel-helper-macos-intel"
-            elif macos_variant == "arm64":
-                platform_variant = "arm64"
-                binary_name = "otel-helper-macos-arm64"
-            elif current_machine == "arm64":
-                platform_variant = "arm64"
-                binary_name = "otel-helper-macos-arm64"
-            else:
-                platform_variant = "intel"
-                binary_name = "otel-helper-macos-intel"
-        elif target_platform == "linux":
-            platform_variant = "x86_64"
-            binary_name = "otel-helper-linux"
-        else:
-            raise ValueError(f"Unsupported target platform: {target_platform}")
-
-        # Check platform compatibility (same as credential-process)
-        if target_platform == "macos" and current_system != "darwin":
-            raise RuntimeError(f"Cannot build macOS binary on {current_system}. Nuitka requires native builds.")
-        elif target_platform == "linux" and current_system != "linux":
-            raise RuntimeError(f"Cannot build Linux binary on {current_system}. Nuitka requires native builds.")
-
-        # Find the source file
-        src_file = Path(__file__).parent.parent.parent.parent / "otel_helper" / "__main__.py"
-
-        if not src_file.exists():
-            raise FileNotFoundError(f"OTEL helper script not found: {src_file}")
-
-        # Build Nuitka command (use poetry run to ensure correct Python version)
-        # If building Intel binary on ARM Mac, use Rosetta
-        if (
-            target_platform == "macos"
-            and platform_variant == "intel"
-            and current_system == "darwin"
-            and current_machine == "arm64"
-        ):
-            cmd = [
-                "arch",
-                "-x86_64",  # Run under Rosetta
-                "poetry",
-                "run",
-                "nuitka",
-            ]
-        else:
-            cmd = [
-                "poetry",
-                "run",
-                "nuitka",
-            ]
-
-        # Add common Nuitka flags
-        cmd.extend(
-            [
-                "--standalone",
-                "--onefile",
-                "--assume-yes-for-downloads",
-                f"--output-filename={binary_name}",
-                f"--output-dir={str(output_dir)}",
-                "--quiet",
-                "--remove-output",
-                "--python-flag=no_site",
-            ]
-        )
-
-        # Add platform-specific flags
-        if target_platform == "macos":
-            cmd.extend(
-                [
-                    "--macos-create-app-bundle",
-                    "--macos-app-name=Claude Code OTEL Helper",
-                    "--disable-console",
-                ]
-            )
-        elif target_platform == "linux":
-            cmd.extend(
-                [
-                    "--linux-onefile-icon=NONE",
-                ]
-            )
-
-        # Add the source file
-        cmd.append(str(src_file))
-
-        # Run Nuitka (from source directory where pyproject.toml is located)
-        source_dir = Path(__file__).parent.parent.parent.parent
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=source_dir)
-        if result.returncode != 0:
-            raise RuntimeError(f"Nuitka build failed for OTEL helper: {result.stderr}")
-
-        return output_dir / binary_name
-
     def _create_config(
         self,
         output_dir: Path,
@@ -2144,9 +1400,32 @@ if [ -d "claude-settings" ]; then
         fi
 
         if [ "$SKIP_SETTINGS" != "true" ]; then
-            # Replace placeholders and write settings
-            sed -e "s|__OTEL_HELPER_PATH__|$HOME/claude-code-with-bedrock/otel-helper|g" \
-                -e "s|__CREDENTIAL_PROCESS_PATH__|$HOME/claude-code-with-bedrock/credential-process|g" \
+            # Build per-user metadata header for ANTHROPIC_CUSTOM_HEADERS.
+            #
+            # credential-process --get-bedrock-metadata-headers prints a single line in
+            # the form 'X-Amzn-Bedrock-Request-Metadata: {...}' to stdout (everything
+            # else goes to stderr).  If OIDC auth fails or no claims resolve, we fall
+            # back to an empty metadata object so Claude Code still works — attribution
+            # is just lost for that user.
+            CRED_BIN="$HOME/claude-code-with-bedrock/credential-process"
+            BEDROCK_HEADER=$("$CRED_BIN" --profile "{profile_name}" --get-bedrock-metadata-headers 2>/dev/null || true)
+            if [ -z "$BEDROCK_HEADER" ]; then
+                echo "⚠ Could not build user metadata header — attribution will be empty." >&2
+                BEDROCK_HEADER='X-Amzn-Bedrock-Request-Metadata: {{}}'
+            fi
+
+            # JSON-escape the header value (quotes, backslashes) so it survives being
+            # injected into a JSON string field.  Using python3 keeps this portable
+            # across bash 3 (default macOS) and bash 4+.
+            ESCAPED_HEADER=$(printf '%s' "$BEDROCK_HEADER" | python3 -c '
+import json, sys
+print(json.dumps(sys.stdin.read())[1:-1], end="")
+')
+
+            # Replace placeholders and write settings.
+            # Note: sed delimiter is | because the credential-process path contains /.
+            sed -e "s|__CREDENTIAL_PROCESS_PATH__|$HOME/claude-code-with-bedrock/credential-process|g" \
+                -e "s|__ANTHROPIC_CUSTOM_HEADERS__|$ESCAPED_HEADER|g" \
                 "claude-settings/settings.json" > ~/.claude/settings.json
             echo "✓ Claude Code settings configured"
         fi
@@ -2402,8 +1681,24 @@ if exist "claude-settings" (
         )
 
         if not "!SKIP_SETTINGS!"=="true" (
-            REM Use PowerShell to replace placeholders
-            powershell -NoProfile -Command "$otelPath = $env:USERPROFILE + '\\claude-code-with-bedrock\\otel-helper.exe' -replace '\\\\', '/'; $credPath = $env:USERPROFILE + '\\claude-code-with-bedrock\\credential-process.exe' -replace '\\\\', '/'; (Get-Content 'claude-settings\\settings.json') -replace '__OTEL_HELPER_PATH__', $otelPath -replace '__CREDENTIAL_PROCESS_PATH__', $credPath | Set-Content (Join-Path $env:USERPROFILE '.claude\\settings.json')"
+            REM Build per-user metadata header for ANTHROPIC_CUSTOM_HEADERS.
+            REM credential-process --get-bedrock-metadata-headers prints a single-line header value
+            REM to stdout (errors go to stderr).  On failure we use an empty metadata fallback so
+            REM Claude Code still works — attribution is just lost for that user.
+            for /f "delims=" %%H in ('"%USERPROFILE%\claude-code-with-bedrock\credential-process.exe" --profile {profile_name} --get-bedrock-metadata-headers 2^>nul') do set "BEDROCK_HEADER=%%H"
+            if not defined BEDROCK_HEADER set "BEDROCK_HEADER=X-Amzn-Bedrock-Request-Metadata: {{}}"
+
+            REM PowerShell handles all escaping — passing $env:BEDROCK_HEADER avoids cmd.exe quoting hell.
+            set "_PS_BEDROCK_HEADER=!BEDROCK_HEADER!"
+            powershell -NoProfile -Command ^
+              "$credPath = $env:USERPROFILE + '\claude-code-with-bedrock\credential-process.exe' -replace '\\', '/'; ^
+               $hdr = $env:_PS_BEDROCK_HEADER; ^
+               $hdrEscaped = ($hdr -replace '\\','\\\\') -replace '\"','\\\"'; ^
+               (Get-Content 'claude-settings\settings.json') ^
+                 -replace '__CREDENTIAL_PROCESS_PATH__', $credPath ^
+                 -replace '__ANTHROPIC_CUSTOM_HEADERS__', $hdrEscaped ^
+                 | Set-Content (Join-Path $env:USERPROFILE '.claude\settings.json')"
+            set "_PS_BEDROCK_HEADER="
             echo OK Claude Code settings configured
         )
     )
@@ -2704,50 +1999,30 @@ Available metrics include:
                 elif "haiku" in model_id and haiku_arn:
                     settings["env"]["ANTHROPIC_MODEL"] = haiku_arn
 
-            # If monitoring is enabled, add telemetry configuration
+            # If monitoring is enabled, attach the bedrock-native attribution placeholder.
+            #
+            # In v3.0+ the monitoring path is Bedrock model invocation logging instead of
+            # the OTEL pipeline.  Per-user/per-team attribution flows through a single
+            # env var: ANTHROPIC_CUSTOM_HEADERS, whose value is the magic header
+            # ``X-Amzn-Bedrock-Request-Metadata: {<json>}`` that Bedrock surfaces in
+            # every invocation log line as ``$.requestMetadata.*``.
+            #
+            # The placeholder ``__ANTHROPIC_CUSTOM_HEADERS__`` is replaced by install.sh
+            # using the output of ``credential-process --get-bedrock-metadata-headers``.
+            # That subcommand decodes the user's JWT and forwards every non-boilerplate
+            # claim verbatim into the magic header, so each user gets their own values
+            # pinned at install time.
+            #
+            # CLAUDE_CODE_USE_MANTLE=0 is enforced because the Mantle (Responses API)
+            # endpoint silently drops invocation logging — without this guard a user
+            # who toggles Mantle on their box invisibly disables all attribution.
             if profile.monitoring_enabled:
-                monitoring_mode = getattr(profile, "monitoring_mode", "central")
-                endpoint = None
-
-                if monitoring_mode == "sidecar":
-                    # Sidecar: local collector on localhost
-                    endpoint = "http://localhost:4318"
-                else:
-                    # Central: look up ALB endpoint from CloudFormation stack outputs
-                    monitoring_stack = profile.stack_names.get(
-                        "monitoring", f"{profile.identity_pool_name}-otel-collector"
-                    )
-                    cmd = [
-                        "aws", "cloudformation", "describe-stacks",
-                        "--stack-name", monitoring_stack,
-                        "--region", profile.aws_region,
-                        "--query", "Stacks[0].Outputs",
-                        "--output", "json",
-                    ]
-                    result = subprocess.run(cmd, capture_output=True, text=True)
-                    if result.returncode == 0:
-                        outputs = json.loads(result.stdout)
-                        for output in outputs:
-                            if output["OutputKey"] == "CollectorEndpoint":
-                                endpoint = output["OutputValue"]
-                                break
-
-                if endpoint:
-                    settings["env"].update(
-                        {
-                            "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
-                            "OTEL_METRICS_EXPORTER": "otlp",
-                            "OTEL_LOGS_EXPORTER": "otlp",
-                            "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
-                            "OTEL_EXPORTER_OTLP_ENDPOINT": endpoint,
-                            "OTEL_RESOURCE_ATTRIBUTES": "department=engineering,team.id=default,"
-                            "cost_center=default,organization=default",
-                        }
-                    )
-                    settings["otelHeadersHelper"] = "__OTEL_HELPER_PATH__"
-                    console.print(f"[dim]Added monitoring endpoint: {endpoint}[/dim]")
-                else:
-                    console.print("[yellow]Warning: No monitoring endpoint found[/yellow]")
+                settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "__ANTHROPIC_CUSTOM_HEADERS__"
+                settings["env"]["CLAUDE_CODE_USE_MANTLE"] = "0"
+                console.print(
+                    "[dim]Added Bedrock-native attribution: "
+                    "ANTHROPIC_CUSTOM_HEADERS placeholder will be filled by install.sh[/dim]"
+                )
 
             # Save settings.json
             settings_path = claude_dir / "settings.json"

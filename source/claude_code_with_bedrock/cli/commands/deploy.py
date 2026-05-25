@@ -45,6 +45,15 @@ class DeployCommand(Command):
         ),
         option("dry-run", description="Show what would be deployed without executing", flag=True),
         option("show-commands", description="Show AWS CLI commands instead of executing", flag=True),
+        option(
+            "remove-otel-stacks",
+            description=(
+                "Migration: delete legacy OTEL stacks (networking + monitoring + analytics + cowork-dashboard). "
+                "Use once when upgrading from a v2.x deployment to the bedrock-native logging path."
+            ),
+            flag=True,
+        ),
+        option("yes", description="Skip the confirmation prompt for --remove-otel-stacks", flag=True),
     ]
 
     def handle(self) -> int:
@@ -89,6 +98,12 @@ class DeployCommand(Command):
         dry_run = self.option("dry-run")
         show_commands = self.option("show-commands")
 
+        # Migration mode: tear down legacy OTEL stacks before continuing.
+        # Runs first because it's destructive and we want it isolated from the
+        # normal deploy flow.
+        if self.option("remove-otel-stacks"):
+            return self._remove_otel_stacks(profile, console, skip_confirm=self.option("yes"))
+
         # Determine which stacks to deploy
         stacks_to_deploy = []
 
@@ -109,6 +124,12 @@ class DeployCommand(Command):
             elif stack_arg == "monitoring":
                 if profile.monitoring_enabled:
                     stacks_to_deploy.append(("monitoring", "OpenTelemetry Collector"))
+                else:
+                    console.print("[yellow]Monitoring is not enabled in your configuration.[/yellow]")
+                    return 1
+            elif stack_arg == "bedrock-logging":
+                if profile.monitoring_enabled:
+                    stacks_to_deploy.append(("bedrock-logging", "Bedrock Model Invocation Logging"))
                 else:
                     console.print("[yellow]Monitoring is not enabled in your configuration.[/yellow]")
                     return 1
@@ -158,7 +179,7 @@ class DeployCommand(Command):
             else:
                 console.print(f"[red]Unknown stack: {stack_arg}[/red]")
                 console.print(
-                    "Valid stacks: auth, distribution, networking, monitoring, dashboard, cowork-dashboard, analytics, quota, codebuild\n"
+                    "Valid stacks: auth, distribution, bedrock-logging, dashboard, quota, codebuild\n"
                 )
                 console.print("[dim]Tip: Use 'ccwb deploy' without arguments to deploy all enabled stacks.[/dim]")
                 console.print("[dim]Use 'ccwb deploy quota' for quota-specific updates or late enablement.[/dim]")
@@ -173,26 +194,17 @@ class DeployCommand(Command):
             if profile.enable_distribution:
                 stacks_to_deploy.append(("distribution", "Distribution infrastructure (S3 + IAM)"))
 
-            # Deploy remaining monitoring stacks
+            # Deploy remaining monitoring stacks (Bedrock-native logging path).
+            #
+            # In v3.0+ the OTEL pipeline (networking + monitoring + analytics stacks)
+            # is replaced by a single bedrock-logging stack. The dashboard and quota
+            # stacks now read from CloudWatch Custom Metrics published by metric
+            # filters on Bedrock model invocation logs.
             if profile.monitoring_enabled:
-                monitoring_mode = getattr(profile, "monitoring_mode", "central")
-                if monitoring_mode == "central":
-                    vpc_config = profile.monitoring_config or {}
-                    if vpc_config.get("create_vpc", True):
-                        stacks_to_deploy.append(("networking", "VPC Networking for OTEL Collector"))
-                    stacks_to_deploy.append(("s3bucket", "S3 Bucket"))
-                    stacks_to_deploy.append(("monitoring", "OpenTelemetry Collector"))
-                    stacks_to_deploy.append(("dashboard", "CloudWatch Dashboard"))
-                    stacks_to_deploy.append(("cowork-dashboard", "CoWork CloudWatch Dashboard"))
-                    if getattr(profile, "analytics_enabled", True):
-                        stacks_to_deploy.append(("analytics", "Analytics Pipeline (Kinesis Firehose + Athena)"))
-                else:
-                    # Sidecar mode: only deploy dashboard (no ECS/VPC/Athena pipeline)
-                    stacks_to_deploy.append(("dashboard", "CloudWatch Dashboard"))
-                # Quota monitoring works with both modes (needs s3bucket for Lambda packaging)
+                stacks_to_deploy.append(("s3bucket", "S3 Bucket"))
+                stacks_to_deploy.append(("bedrock-logging", "Bedrock Model Invocation Logging"))
+                stacks_to_deploy.append(("dashboard", "CloudWatch Dashboard"))
                 if getattr(profile, "quota_monitoring_enabled", False):
-                    if monitoring_mode == "sidecar":
-                        stacks_to_deploy.append(("s3bucket", "S3 Bucket"))
                     stacks_to_deploy.append(("quota", "Quota Monitoring (Per-User Token Limits)"))
             # Check if CodeBuild is enabled
             if getattr(profile, "enable_codebuild", False):
@@ -708,9 +720,33 @@ class DeployCommand(Command):
             elif stack_type == "dashboard":
                 template = project_root / "deployment" / "infrastructure" / "claude-code-dashboard.yaml"
                 stack_name = profile.stack_names.get("dashboard", f"{profile.identity_pool_name}-dashboard")
-                params = [f"MetricsRegion={profile.aws_region}"]
+                params = [
+                    f"ProfileName={profile.name}",
+                    "MetricNamespace=ClaudeCodeBedrock",
+                ]
                 return deploy_with_cf(
                     template, stack_name, params, task_description="Deploying monitoring dashboard..."
+                )
+
+            elif stack_type == "bedrock-logging":
+                # New in v3.0: Bedrock model invocation logging stack replaces the OTEL pipeline.
+                # Custom resource Lambda flips on PutModelInvocationLoggingConfiguration; metric
+                # filters slice the resulting logs into the ClaudeCodeBedrock CloudWatch namespace.
+                template = (
+                    project_root / "deployment" / "infrastructure" / "bedrock-logging.yaml"
+                )
+                stack_name = profile.stack_names.get(
+                    "bedrock-logging", f"{profile.identity_pool_name}-bedrock-logging"
+                )
+                params = [
+                    f"ProfileName={profile.name}",
+                    f"BedrockLoggingDestination={getattr(profile, 'bedrock_logging_destination', 'cloudwatch')}",
+                    f"DataRetentionDays={profile.data_retention_days}",
+                    "MetricNamespace=ClaudeCodeBedrock",
+                ]
+                return deploy_with_cf(
+                    template, stack_name, params,
+                    task_description="Deploying Bedrock model invocation logging...",
                 )
 
             elif stack_type == "cowork-dashboard":
@@ -1224,3 +1260,99 @@ class DeployCommand(Command):
             console.print(f"[yellow]Warning: Could not verify ECS service linked role: {str(e)}[/yellow]")
             console.print("[dim]If deployment fails, manually create the role with:[/dim]")
             console.print("[dim]aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com[/dim]")
+
+
+    def _remove_otel_stacks(self, profile, console, skip_confirm: bool = False) -> int:
+        """Migration helper: delete legacy OTEL CloudFormation stacks.
+
+        Used once by operators upgrading from v2.x (OTEL Collector pipeline) to v3.0
+        (Bedrock-native logging). Deletes the four stacks that exist only to support
+        the OTEL pipeline, in dependency order so CFN doesn't fight us:
+
+            1. analytics       (depends on networking + monitoring)
+            2. cowork-dashboard (depends on metric filters from monitoring)
+            3. monitoring      (depends on networking)
+            4. networking      (root of OTEL VPC tree)
+
+        We do not touch:
+            - auth, quota, distribution, s3bucket, dashboard — those stay.
+            - bedrock-logging — new in v3.0, deployed separately.
+
+        Stack names are read from ``profile.stack_names`` (with sensible defaults)
+        so customized deployments are honored.
+        """
+        import boto3
+
+        cfn = boto3.client("cloudformation", region_name=profile.aws_region)
+
+        # Order matters: dependents first.
+        otel_stack_keys = ["analytics", "cowork-dashboard", "monitoring", "networking"]
+        to_delete = []
+        for key in otel_stack_keys:
+            stack_name = profile.stack_names.get(
+                key, f"{profile.identity_pool_name}-{key}"
+            )
+            try:
+                resp = cfn.describe_stacks(StackName=stack_name)
+                status = resp["Stacks"][0]["StackStatus"]
+                if status not in {"DELETE_COMPLETE", "DELETE_IN_PROGRESS"}:
+                    to_delete.append((key, stack_name, status))
+            except cfn.exceptions.ClientError as e:
+                # Stack absent — nothing to do for this one.
+                if "does not exist" in str(e):
+                    continue
+                console.print(f"[yellow]⚠ Could not check {stack_name}: {e}[/yellow]")
+
+        if not to_delete:
+            console.print("[green]✓ No legacy OTEL stacks found. Nothing to delete.[/green]")
+            return 0
+
+        console.print("\n[bold yellow]The following legacy OTEL stacks will be DELETED:[/bold yellow]")
+        for key, name, status in to_delete:
+            console.print(f"  • {name} ({key}, currently {status})")
+        console.print(
+            "\nThis is intended as a one-time migration step from the v2.x OTEL pipeline "
+            "to v3.0's bedrock-native logging."
+        )
+
+        if not skip_confirm:
+            import questionary
+            confirm = questionary.confirm(
+                "Proceed with deletion?", default=False
+            ).ask()
+            if not confirm:
+                console.print("[yellow]Aborted.[/yellow]")
+                return 1
+
+        # Trigger deletes in order, then poll for completion sequentially.
+        for key, name, _ in to_delete:
+            console.print(f"\n[cyan]Deleting {name}...[/cyan]")
+            try:
+                cfn.delete_stack(StackName=name)
+            except cfn.exceptions.ClientError as e:
+                console.print(f"[red]Failed to start delete on {name}: {e}[/red]")
+                return 1
+
+            waiter = cfn.get_waiter("stack_delete_complete")
+            try:
+                waiter.wait(StackName=name, WaiterConfig={"Delay": 15, "MaxAttempts": 80})
+                console.print(f"[green]✓ {name} deleted[/green]")
+                # Drop from profile.stack_names so subsequent ccwb deploy doesn't try to use it.
+                profile.stack_names.pop(key, None)
+            except Exception as e:
+                console.print(f"[red]Delete waiter failed for {name}: {e}[/red]")
+                console.print("[dim]Inspect the stack in CloudFormation console and retry.[/dim]")
+                return 1
+
+        # Persist updated stack_names.
+        try:
+            from claude_code_with_bedrock.config import Config
+            cfg = Config.load()
+            cfg.profiles[profile.name] = profile
+            cfg.save()
+        except Exception as e:
+            console.print(f"[yellow]⚠ Could not persist updated profile: {e}[/yellow]")
+
+        console.print("\n[bold green]✓ Legacy OTEL stacks removed.[/bold green]")
+        console.print("[dim]Run `poetry run ccwb deploy` to deploy the new bedrock-logging stack.[/dim]")
+        return 0

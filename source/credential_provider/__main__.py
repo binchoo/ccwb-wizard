@@ -2094,6 +2094,15 @@ def main():
         "--get-monitoring-token", action="store_true", help="Get cached monitoring token instead of AWS credentials"
     )
     parser.add_argument(
+        "--get-bedrock-metadata-headers",
+        action="store_true",
+        help=(
+            "Build the ANTHROPIC_CUSTOM_HEADERS value from the JWT claim_map and print it "
+            "to stdout. Used by install.sh to inject per-user metadata into ~/.claude/settings.json. "
+            "Triggers OIDC authentication if no cached id_token is available."
+        ),
+    )
+    parser.add_argument(
         "--clear-cache", action="store_true", help="Clear cached credentials and force re-authentication"
     )
     parser.add_argument(
@@ -2184,6 +2193,66 @@ def main():
                 # Return failure exit code so OTEL helper knows auth failed
                 # This prevents OTEL helper from using default/unknown values
                 sys.exit(1)
+
+    # Handle bedrock metadata header request (used by install.sh).
+    #
+    # Builds the ANTHROPIC_CUSTOM_HEADERS value from the active JWT id_token's claims.
+    # Every non-boilerplate claim is forwarded as-is — there is no profile-level mapping.
+    # Output goes to stdout as a single line; everything else (debug, errors) goes to
+    # stderr so the caller can capture only the header value.
+    #
+    # Exit codes:
+    #   0   — header line printed to stdout
+    #   1   — authentication failed or no claims could be resolved
+    #   130 — user cancelled OIDC flow (Ctrl+C during browser auth)
+    if args.get_bedrock_metadata_headers:
+        from credential_provider.bedrock_metadata import (
+            build_header_line,
+            build_metadata_from_jwt,
+        )
+
+        # 1) Acquire id_token (cached preferred, OIDC re-auth if needed).
+        #    get_monitoring_token returns the cached id_token directly; if absent we fall
+        #    back to authenticate_for_monitoring which runs the full PKCE flow.
+        id_token = auth.get_monitoring_token()
+        if not id_token:
+            auth._debug_print(
+                "No cached id_token for bedrock-metadata-headers, triggering OIDC auth..."
+            )
+            try:
+                id_token = auth.authenticate_for_monitoring()
+            except KeyboardInterrupt:
+                print("Authentication cancelled by user.", file=sys.stderr)
+                sys.exit(130)
+
+        if not id_token:
+            print(
+                "Failed to obtain id_token for bedrock metadata.  Re-run after `claude logout && claude` to refresh.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        # 2) Decode JWT (signature already validated by IdP at issuance time;
+        #    here we only need the claims payload).
+        try:
+            claims = jwt.decode(id_token, options={"verify_signature": False})
+        except Exception as e:
+            print(f"Failed to decode id_token: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        # 3) Forward all non-boilerplate claims, applying Bedrock limits inline.
+        sanitized = build_metadata_from_jwt(claims)
+
+        if not sanitized:
+            # Empty metadata is not an error — caller (install.sh) handles fallback.
+            # We still emit a valid header line so downstream parsing stays simple.
+            auth._debug_print("Resolved metadata is empty after sanitization.")
+
+        # 4) Print single header line.  No trailing newline manipulation needed —
+        #    print() adds \n but install.sh's command substitution strips it.
+        print(build_header_line(sanitized))
+        sys.exit(0)
+
 
     # Handle check-expiration request
     if args.check_expiration:

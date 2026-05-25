@@ -1,0 +1,176 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - heading "Claude Code on Bedrock — Architecture" [level=1] [ref=e5]
+    - generic [ref=e6]: Vite + React + xyflow
+    - generic [ref=e7]:
+      - button "1. Admin · 배포 산출물 생성" [ref=e8] [cursor=pointer]
+      - button "2. User · Installer 로컬 구성" [active] [ref=e9] [cursor=pointer]
+  - main [ref=e10]:
+    - application [ref=e255]:
+      - generic [ref=e257]:
+        - generic:
+          - generic:
+            - img
+            - img:
+              - group "Edge from src-zip to user-persona" [ref=e258] [cursor=pointer]:
+                - generic [ref=e261]:
+                  - generic: ① 다운로드 (presigned URL)
+            - img:
+              - group "Edge from user-persona to install-sh" [ref=e263] [cursor=pointer]:
+                - generic [ref=e266]:
+                  - generic: ② 1회 실행
+            - img:
+              - group "Edge from install-sh to fs-bin" [ref=e268] [cursor=pointer]:
+                - generic [ref=e271]:
+                  - generic: ③ 바이너리 배치
+            - img:
+              - group "Edge from install-sh to fs-claude-settings" [ref=e273] [cursor=pointer]:
+                - generic [ref=e276]:
+                  - generic: ④ settings.json 생성
+            - img:
+              - group "Edge from install-sh to fs-aws-config" [ref=e278] [cursor=pointer]:
+                - generic [ref=e281]:
+                  - generic: ⑤ ~/.aws/config 추가
+            - img:
+              - group "Edge from rt-claude to fs-aws-config" [ref=e283] [cursor=pointer]:
+                - generic [ref=e286]:
+                  - generic: ⑥ AWS_PROFILE 조회
+            - img:
+              - group "Edge from fs-aws-config to rt-credproc" [ref=e288] [cursor=pointer]:
+                - generic [ref=e291]:
+                  - generic: ⑦ credential_process 호출
+            - img:
+              - group "Edge from rt-credproc to aws-idp" [ref=e293] [cursor=pointer]:
+                - generic [ref=e296]:
+                  - generic: ⑧ PKCE OIDC (캐시 miss 시)
+            - img:
+              - group "Edge from rt-credproc to aws-quota" [ref=e298] [cursor=pointer]:
+                - generic [ref=e301]:
+                  - generic: ⑨ Quota check (STS 발급 직전)
+            - img:
+              - group "Edge from rt-credproc to aws-sts" [ref=e303] [cursor=pointer]:
+                - generic [ref=e306]:
+                  - generic: ⑩ AssumeRoleWithWebIdentity
+            - img:
+              - group "Edge from rt-claude to aws-bedrock" [ref=e308] [cursor=pointer]:
+                - generic [ref=e311]:
+                  - generic: ⑪ InvokeModel (임시 STS 자격증명)
+            - img:
+              - group "Edge from rt-claude to rt-otelhelper" [ref=e313] [cursor=pointer]:
+                - generic [ref=e316]:
+                  - generic: ⑫ otelHeadersHelper 실행
+            - img:
+              - group "Edge from rt-otelhelper to aws-collector" [ref=e318] [cursor=pointer]:
+                - generic [ref=e321]:
+                  - generic: "⑬a Central: OTLP/HTTP + JWT headers"
+            - img:
+              - group "Edge from rt-otelhelper to rt-sidecar" [ref=e323] [cursor=pointer]:
+                - generic [ref=e326]:
+                  - generic: "⑬b Sidecar: localhost:4318"
+            - img:
+              - group "Edge from rt-sidecar to aws-collector" [ref=e328] [cursor=pointer]:
+                - generic [ref=e331]:
+                  - generic: ⑭ SigV4 직접 push (Sidecar 모드)
+          - generic:
+            - group [ref=e333]:
+              - generic [ref=e335]: 관리자가 만든 산출물 (S3 / Landing Page)
+            - group [ref=e336]:
+              - generic [ref=e338]: End User 로컬 머신 (Mac/Win/Linux)
+            - group [ref=e339]:
+              - generic [ref=e341]: AWS — 런타임 호출 대상
+            - group [ref=e342]:
+              - generic [ref=e343]:
+                - generic [ref=e348]: claude-code-package.zip
+                - generic [ref=e349]: presigned URL · landing page
+                - generic [ref=e350]: DELIVERABLE
+            - group [ref=e351]:
+              - generic [ref=e352]:
+                - generic [ref=e355]: cowork-3p.mobileconfig (옵션)
+                - generic [ref=e356]: Claude Cowork MDM 프로파일
+                - generic [ref=e357]: MDM
+            - group [ref=e358]:
+              - generic [ref=e359]:
+                - generic [ref=e366]: End User
+                - generic [ref=e367]: 개발자 또는 Cowork 사용자
+                - generic [ref=e368]: PERSONA
+            - group [ref=e369]:
+              - generic [ref=e370]:
+                - generic [ref=e377]: install.sh / install.bat
+                - generic [ref=e378]: 1회 실행 → 로컬 구성 자동화
+                - generic [ref=e379]: INSTALLER
+            - group [ref=e380]:
+              - generic [ref=e381]:
+                - generic [ref=e388]: ~/claude-code-with-bedrock/
+                - generic [ref=e389]: credential-process · otel-helper · otelcol(sidecar)
+                - generic [ref=e390]: BINARIES
+            - group [ref=e391]:
+              - generic [ref=e392]:
+                - generic [ref=e401]: ~/.claude/settings.json
+                - generic [ref=e402]: AWS_PROFILE · OTEL endpoint · otelHeadersHelper 자동 지정
+                - generic [ref=e403]: SETTINGS
+            - group [ref=e404]:
+              - generic [ref=e405]:
+                - generic [ref=e414]: ~/.aws/config
+                - generic [ref=e415]: "[profile ClaudeCode] credential_process = ..."
+                - generic [ref=e416]: AWS PROFILE
+            - group [ref=e417]:
+              - generic [ref=e418]:
+                - generic [ref=e425]: Claude Code CLI
+                - generic [ref=e426]: AWS_PROFILE=ClaudeCode 사용
+                - generic [ref=e427]: CLI
+            - group [ref=e428]:
+              - generic [ref=e429]:
+                - generic [ref=e438]: credential-process
+                - generic [ref=e439]: PKCE OIDC + STS · keychain 캐시
+                - generic [ref=e440]: AUTH HELPER
+            - group [ref=e441]:
+              - generic [ref=e442]:
+                - generic [ref=e449]: otel-helper
+                - generic [ref=e450]: JWT claim → OTLP headers (29분 캐시)
+                - generic [ref=e451]: OTEL HEADERS
+            - group [ref=e452]:
+              - generic [ref=e453]:
+                - generic [ref=e460]: otelcol (Sidecar 모드)
+                - generic [ref=e461]: localhost:4318 OTLP 수신 → SigV4로 CW 직접 push
+                - generic [ref=e462]: SIDECAR
+            - group [ref=e463]:
+              - generic [ref=e464]:
+                - generic [ref=e469]: External OIDC IdP
+                - generic [ref=e470]: Okta/Entra/Auth0/Cognito
+                - generic [ref=e471]: IDP
+            - group [ref=e472]:
+              - generic [ref=e473]:
+                - generic [ref=e480]: AWS STS
+                - generic [ref=e481]: AssumeRoleWithWebIdentity → 임시 자격증명
+                - generic [ref=e482]: STS
+            - group [ref=e483]:
+              - generic [ref=e484]:
+                - generic [ref=e491]: Amazon Bedrock
+                - generic [ref=e492]: Claude Sonnet/Opus/Haiku · Cross-region inference
+                - generic [ref=e493]: BEDROCK
+            - group [ref=e494]:
+              - generic [ref=e495]:
+                - generic [ref=e500]: Quota API (옵션)
+                - generic [ref=e501]: API GW + DynamoDB · STS 발급 직전 호출
+                - generic [ref=e502]: QUOTA
+            - group [ref=e503]:
+              - generic [ref=e504]:
+                - generic [ref=e509]: Central Collector ALB · CloudWatch
+                - generic [ref=e510]: OTLP/HTTP 수신 (Central) 또는 SigV4 직접 (Sidecar)
+                - generic [ref=e511]: OBSERVE
+      - img
+      - generic "Control Panel" [ref=e512]:
+        - button "Zoom In" [ref=e513] [cursor=pointer]:
+          - img [ref=e514]
+        - button "Zoom Out" [ref=e516] [cursor=pointer]:
+          - img [ref=e517]
+        - button "Fit View" [ref=e519] [cursor=pointer]:
+          - img [ref=e520]
+      - img "Mini Map" [ref=e523]
+    - generic [ref=e525]:
+      - heading "범례 — User Installer & Runtime" [level=4] [ref=e526]
+      - generic [ref=e529]: install.sh가 로컬 구성
+      - generic [ref=e532]: 인증 흐름 (PKCE OIDC + STS)
+      - generic [ref=e535]: Quota check (STS 발급 직전)
+      - generic [ref=e538]: Bedrock InvokeModel
+      - generic [ref=e541]: OTLP 텔레메트리 (Central / Sidecar)

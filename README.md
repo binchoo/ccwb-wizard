@@ -342,75 +342,64 @@ See [Distribution Comparison](assets/docs/distribution/comparison.md) for detail
 
 ### Monitoring Infrastructure (Optional)
 
-Enable usage visibility with OpenTelemetry monitoring. During `ccwb init`, choose between two monitoring modes:
+Enable usage visibility with **Bedrock model invocation logging** (new in v3.0+).
+The OpenTelemetry pipeline (otel-helper + ECS Fargate + ALB + Firehose + Glue) is
+replaced by a single ``bedrock-logging`` CloudFormation stack that wires Bedrock's
+own logs into CloudWatch Custom Metrics for dashboards and quota enforcement.
 
-| Mode | Description | Infrastructure | Analytics | Cost |
-|------|-------------|----------------|-----------|------|
-| **Central collector** (ECS Fargate) | Server-side collector shared by all users | VPC, ECS Fargate, ALB | Supported | ~$30-50/mo |
-| **Sidecar collector** (local) | Runs on each developer's machine | None | Not in v1 | $0 server cost |
+| Mode | Description | Infrastructure | Cost |
+|------|-------------|----------------|------|
+| **Bedrock-native** (default) | Server-side logging via Bedrock model invocation logs | S3 + CW Logs + metric filters | ~$10–15/mo |
+| **None** | No logging | — | $0 |
 
-Both modes use OTLP to send metrics to CloudWatch and share the same PromQL dashboard.
+**Bedrock-native components:**
 
-**Central collector components:**
+- S3 bucket holding raw invocation logs (90-day lifecycle by default)
+- CloudWatch Logs group ``/aws/bedrock/modelinvocations/<profile>``
+- 4 metric filters extracting ``$.requestMetadata.user`` / ``team`` / ``ModelId`` into the ``ClaudeCodeBedrock`` Custom Metrics namespace
+- CloudWatch dashboard with KPI widgets and time-series segmented by user/team/model
+- Athena workgroup for historical SQL queries against the S3 archive
 
-- VPC and networking resources (or use existing VPC)
-- ECS Fargate cluster running OpenTelemetry collector (OTLP export; adds EMF when analytics enabled)
-- Application Load Balancer for metric ingestion
-- CloudWatch dashboards with PromQL widgets over OTLP-ingested metrics
+User attribution flows through ``ANTHROPIC_CUSTOM_HEADERS``, which Claude Code
+attaches to every Bedrock call as the magic header
+``X-Amzn-Bedrock-Request-Metadata``. The header value is built once at install time
+by ``credential-process --get-bedrock-metadata-headers`` from the user's JWT.
 
-**Optional Analytics Add-On:**
-
-- Kinesis Data Firehose streaming metrics to S3
-- S3 data lake for long-term storage
-- Amazon Athena for SQL queries on historical data
-- AWS Glue Data Catalog for schema management
-
-See [QUICK_START.md](QUICK_START.md) for step-by-step deployment instructions.
+See [Migration Guide](assets/docs/MIGRATION_OTEL_TO_BEDROCK_NATIVE.md) if upgrading from v2.x.
 
 ## Monitoring and Operations
 
-Optional OpenTelemetry monitoring provides comprehensive usage visibility for cost attribution, capacity planning, and productivity insights.
+Bedrock model invocation logging provides comprehensive usage visibility for
+cost attribution, quota enforcement, and capacity planning.
 
 ### Available Metrics
 
-**Token Economics:**
+**Token economics:**
 
-- Input/output/cache token consumption by user, model, and type
-- Prompt caching effectiveness (hit rates, token savings)
-- Cost attribution by user, team, or department
+- Input/output token counts per user, team, and model
+- Invocation count per user, team, and model
+- Untagged-invocation counter (catches users who skipped install.sh)
 
-**Code Activity:**
+**Operational health:**
 
-- Lines of code written vs accepted (productivity signal)
-- File operations breakdown (edits, searches, reads)
-- Programming language distribution
-
-**Operational Health:**
-
-- Active users and top consumers
-- Usage patterns (hourly/daily heatmaps)
-- Authentication and API error rates
+- Top consumers (single-value KPI widgets, 24h windows)
+- Tokens by team, tokens by model time-series
+- Invocation rate (per-minute granularity)
 
 ### Infrastructure
 
-During `ccwb init`, choose between two monitoring modes:
+A single ``bedrock-logging`` CloudFormation stack provides:
 
-| Mode | Description | Infrastructure | Analytics | Cost |
-|------|-------------|----------------|-----------|------|
-| **Central collector** (ECS Fargate) | Server-side collector shared by all users | VPC, ECS Fargate, ALB | Supported | ~$30-50/mo |
-| **Sidecar collector** (local) | Runs on each developer's machine | None | Not in v1 | $0 server cost |
+- S3 bucket for long-term invocation log archive (default 90-day lifecycle)
+- CloudWatch Logs group with metric filters publishing to the ``ClaudeCodeBedrock`` namespace
+- IAM role for the Bedrock service to write logs
+- Custom resource Lambda that toggles ``PutModelInvocationLoggingConfiguration``
+- Athena workgroup pre-configured for ad-hoc SQL on the S3 archive
 
-Both modes use OTLP to send metrics to CloudWatch and share the same PromQL dashboard.
+The dashboard stack reads exclusively from CloudWatch Custom Metrics, so all
+widgets render without round-trips to OTLP collectors or PromQL APIs.
 
-The central collector stack (deployed with `ccwb deploy monitoring`) includes:
-
-- ECS Fargate running OpenTelemetry collector
-- Application Load Balancer for metric ingestion
-- CloudWatch dashboards for real-time visualization
-- Optional: S3 data lake + Athena for historical analysis
-
-See [Monitoring Guide](assets/docs/MONITORING.md) for setup details and dashboard examples.
-See [Analytics Guide](assets/docs/ANALYTICS.md) for SQL queries on historical data.
+See [Migration Guide](assets/docs/MIGRATION_OTEL_TO_BEDROCK_NATIVE.md) for details.
 
 ## Additional Resources
 

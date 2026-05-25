@@ -1,0 +1,380 @@
+/* 전역 스타일 - 다이어그램 컨테이너와 탭 UI */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #f7f8fa;
+  color: #1d2433;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.app-header {
+  padding: 12px 20px;
+  background: #232f3e;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid #16202d;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.app-header .subtitle {
+  font-size: 12px;
+  color: #a1b2c5;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.tab-btn {
+  background: transparent;
+  color: #c5d2e0;
+  border: 1px solid #3b4a5e;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tab-btn:hover {
+  background: #2d3a4d;
+  color: #fff;
+}
+
+.tab-btn.active {
+  background: #ff9900;
+  color: #232f3e;
+  border-color: #ff9900;
+}
+
+.diagram-container {
+  flex: 1;
+  position: relative;
+  background: #f7f8fa;
+}
+
+/* 노드 공통 스타일 */
+.node-card {
+  background: #fff;
+  border: 1.5px solid #d5dbe1;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  min-width: 140px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.node-card .node-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: #1d2433;
+  margin-bottom: 3px;
+}
+
+.node-card .node-subtitle {
+  font-size: 10.5px;
+  color: #6b7785;
+  line-height: 1.35;
+}
+
+.node-card .node-tag {
+  display: inline-block;
+  background: #eef1f5;
+  color: #5b6878;
+  font-size: 9.5px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-top: 4px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+/* 노드 카테고리별 색상 */
+.node-card.cat-admin {
+  border-color: #5294cf;
+  background: #f0f7fd;
+}
+.node-card.cat-admin .node-tag {
+  background: #5294cf;
+  color: #fff;
+}
+
+.node-card.cat-user {
+  border-color: #4caf7d;
+  background: #f0faf4;
+}
+.node-card.cat-user .node-tag {
+  background: #4caf7d;
+  color: #fff;
+}
+
+.node-card.cat-aws-iam {
+  border-color: #c925d1;
+  background: #fbf3fc;
+}
+.node-card.cat-aws-iam .node-tag {
+  background: #c925d1;
+  color: #fff;
+}
+
+.node-card.cat-aws-compute {
+  border-color: #ed7100;
+  background: #fff6ed;
+}
+.node-card.cat-aws-compute .node-tag {
+  background: #ed7100;
+  color: #fff;
+}
+
+.node-card.cat-aws-storage {
+  border-color: #7aa116;
+  background: #f4f9eb;
+}
+.node-card.cat-aws-storage .node-tag {
+  background: #7aa116;
+  color: #fff;
+}
+
+.node-card.cat-aws-mgmt {
+  border-color: #e7157b;
+  background: #fdeef5;
+}
+.node-card.cat-aws-mgmt .node-tag {
+  background: #e7157b;
+  color: #fff;
+}
+
+.node-card.cat-aws-network {
+  border-color: #8c4fff;
+  background: #f5f0ff;
+}
+.node-card.cat-aws-network .node-tag {
+  background: #8c4fff;
+  color: #fff;
+}
+
+.node-card.cat-aws-analytics {
+  border-color: #1f8efa;
+  background: #ebf5fe;
+}
+.node-card.cat-aws-analytics .node-tag {
+  background: #1f8efa;
+  color: #fff;
+}
+
+.node-card.cat-external {
+  border-color: #6b7785;
+  background: #f3f4f6;
+}
+.node-card.cat-external .node-tag {
+  background: #6b7785;
+  color: #fff;
+}
+
+.node-card.cat-artifact {
+  border-color: #d4a72c;
+  background: #fdf8e7;
+  border-style: dashed;
+}
+.node-card.cat-artifact .node-tag {
+  background: #d4a72c;
+  color: #fff;
+}
+
+/* 그룹 노드 (배경 컨테이너) */
+.group-node {
+  background: rgba(255, 255, 255, 0.5);
+  border: 1.5px dashed #b8c2cc;
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+
+.group-node .group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #5b6878;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.group-node.group-aws {
+  border-color: #ed7100;
+  background: rgba(255, 246, 237, 0.4);
+}
+.group-node.group-aws .group-label {
+  color: #b35900;
+}
+
+.group-node.group-local {
+  border-color: #4caf7d;
+  background: rgba(240, 250, 244, 0.4);
+}
+.group-node.group-local .group-label {
+  color: #2d7a4f;
+}
+
+.group-node.group-monitoring-central {
+  border-color: #1f8efa;
+  background: rgba(235, 245, 254, 0.4);
+}
+.group-node.group-monitoring-central .group-label {
+  color: #0a5fb8;
+}
+
+.group-node.group-monitoring-sidecar {
+  border-color: #8c4fff;
+  background: rgba(245, 240, 255, 0.4);
+}
+.group-node.group-monitoring-sidecar .group-label {
+  color: #5e2eb8;
+}
+
+/* 범례 패널 */
+.legend-panel {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #d5dbe1;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 11px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  z-index: 5;
+  max-width: 280px;
+}
+
+.legend-panel h4 {
+  margin: 0 0 6px 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: #1d2433;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 3px 0;
+}
+
+.legend-swatch {
+  width: 20px;
+  height: 3px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.legend-swatch.dashed {
+  border-top: 2px dashed;
+  height: 0;
+  background: transparent;
+}
+
+.legend-row .legend-text {
+  color: #5b6878;
+  font-size: 10.5px;
+}
+
+
+/* CodeBlockNode - raw 파일 내용을 표시하는 노드 */
+.codeblock-node {
+  background: #fdfaf0;
+  border: 1.5px solid #d4a72c;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 11px;
+  width: 380px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.codeblock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.codeblock-title {
+  font-weight: 700;
+  font-size: 11.5px;
+  color: #1d2433;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+
+.codeblock-tag {
+  display: inline-block;
+  background: #d4a72c;
+  color: #fff;
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.codeblock-subtitle {
+  font-size: 10px;
+  color: #6b7785;
+  margin-bottom: 6px;
+  line-height: 1.3;
+}
+
+.codeblock-pre {
+  background: #1e2530;
+  color: #e8eef5;
+  border-radius: 5px;
+  padding: 8px 10px;
+  margin: 0;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-x: auto;
+  max-height: 320px;
+  overflow-y: auto;
+  white-space: pre;
+}
+
+.codeblock-pre code {
+  font-family: inherit;
+  color: inherit;
+  font-size: inherit;
+}
+
+.codeblock-pre.lang-json code {
+  color: #a8d4ff;
+}
+
+.codeblock-pre.lang-ini code {
+  color: #ffd9a8;
+}

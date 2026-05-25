@@ -858,129 +858,27 @@ class InitCommand(Command):
                     "  [yellow]-[/yellow] Higher cost (ECS tasks, NAT gateways, load balancer)\n"
                     "  [yellow]-[/yellow] Requires network connectivity to collector endpoint\n"
                 )
-                monitoring_mode = questionary.select(
-                    "Monitoring mode:",
-                    choices=[
-                        questionary.Choice(
-                            "Sidecar collector (Recommended — runs locally, no server infra)",
-                            value="sidecar",
-                        ),
-                        questionary.Choice(
-                            "Central collector (ECS Fargate — server-side, optional Athena SQL pipeline)",
-                            value="central",
-                        ),
-                    ],
-                    default=config.get("monitoring", {}).get("mode", "sidecar"),
-                ).ask()
-                config["monitoring"]["mode"] = monitoring_mode
+                # In v3.0 the monitoring path is fixed: Bedrock model invocation logging.
+                # No mode prompt — the OTEL sidecar/central choice is gone, and so is the
+                # Athena-only "analytics" stack (S3 export is now part of bedrock-logging).
+                config["monitoring"]["mode"] = "bedrock-native"
+                # These keys are kept on the profile for backward compatibility but
+                # have no effect under the bedrock-native pipeline.
+                config["monitoring"]["vpc_config"] = None
+                config["monitoring"]["custom_domain"] = None
+                config["monitoring"]["hosted_zone_id"] = None
+                if "analytics" not in config:
+                    config["analytics"] = {}
+                # Analytics workgroup is now provisioned inside bedrock-logging
+                # automatically when the destination includes S3, so this flag is
+                # advisory only.
+                config["analytics"]["enabled"] = False
+                console.print(
+                    "[green]✓[/green] Bedrock-native logging will be deployed "
+                    "(invocation logs → CloudWatch + optional S3, no OTEL collector)."
+                )
 
-                if monitoring_mode == "central":
-                    # Central mode: VPC, HTTPS, analytics configuration
-                    existing_vpc_config = config.get("monitoring", {}).get("vpc_config")
-                    vpc_config = self._configure_vpc(
-                        config.get("aws", {}).get("region", get_current_region()), existing_vpc_config
-                    )
-                    if not vpc_config:
-                        return None
-                    config["monitoring"]["vpc_config"] = vpc_config
-
-                    # Optional: Configure HTTPS with custom domain
-                    console.print("\n[yellow]Optional: Configure HTTPS for secure telemetry[/yellow]")
-
-                    existing_custom_domain = config["monitoring"].get("custom_domain")
-                    existing_zone_id = config["monitoring"].get("hosted_zone_id")
-                    already_configured = bool(existing_custom_domain and existing_zone_id)
-
-                    if already_configured:
-                        console.print(f"[dim]Current configuration: {existing_custom_domain}[/dim]")
-
-                    enable_https = questionary.confirm(
-                        "Enable HTTPS with custom domain?", default=already_configured
-                    ).ask()
-
-                    if enable_https:
-                        custom_domain = questionary.text(
-                            "Enter custom domain name (e.g., telemetry.company.com):",
-                            validate=lambda x: len(x) > 0 and "." in x,
-                            default=existing_custom_domain if existing_custom_domain else "",
-                        ).ask()
-
-                        config["monitoring"]["custom_domain"] = custom_domain
-
-                        hosted_zones, zones_error = self._get_hosted_zones()
-                        if hosted_zones:
-                            zone_choices = [
-                                f"{zone['Name'].rstrip('.')} ({zone['Id'].split('/')[-1]})"
-                                for zone in hosted_zones
-                            ]
-
-                            default_zone = None
-                            if existing_zone_id:
-                                for choice in zone_choices:
-                                    if existing_zone_id in choice:
-                                        default_zone = choice
-                                        break
-
-                            selected_zone = questionary.select(
-                                "Select Route53 hosted zone for the domain:",
-                                choices=zone_choices,
-                                default=default_zone if default_zone else zone_choices[0],
-                            ).ask()
-
-                            zone_id = selected_zone.split("(")[-1].rstrip(")")
-                            config["monitoring"]["hosted_zone_id"] = zone_id
-                            console.print(
-                                f"[green]✓[/green] HTTPS will be enabled with domain: {custom_domain}"
-                            )
-                        else:
-                            if zones_error:
-                                console.print(f"[yellow]Could not list Route53 hosted zones: {zones_error}[/yellow]")
-                            else:
-                                console.print("[yellow]No Route53 hosted zones found in this account.[/yellow]")
-                            console.print("[dim]Domain saved. Enter the Route53 hosted zone ID manually:[/dim]")
-                            manual_zone_id = questionary.text(
-                                "Hosted Zone ID (e.g., Z1234ABCDEFGH, leave blank to set later):",
-                                default=existing_zone_id if existing_zone_id else "",
-                            ).ask()
-                            if manual_zone_id and manual_zone_id.strip():
-                                config["monitoring"]["hosted_zone_id"] = manual_zone_id.strip()
-                                console.print(f"[green]✓[/green] HTTPS configured: {custom_domain} (zone: {manual_zone_id.strip()})")
-                            else:
-                                console.print("[yellow]⚠[/yellow] Domain saved but no zone ID set. Update before deploying.")
-                    else:
-                        config["monitoring"]["custom_domain"] = None
-                        config["monitoring"]["hosted_zone_id"] = None
-
-                    # Analytics configuration (central mode only)
-                    console.print("\n[bold]Analytics Pipeline[/bold]")
-                    console.print("Advanced user metrics and reporting through AWS Athena (~$5/month)")
-                    enable_analytics = questionary.confirm(
-                        "Enable analytics?",
-                        default=config.get("analytics", {}).get("enabled", True),
-                    ).ask()
-
-                    if "analytics" not in config:
-                        config["analytics"] = {}
-                    config["analytics"]["enabled"] = enable_analytics
-
-                    if enable_analytics:
-                        console.print(
-                            "[green]✓[/green] Analytics pipeline will be deployed with your monitoring stack"
-                        )
-
-                else:
-                    # Sidecar mode: no VPC, no HTTPS, no Athena pipeline (PromQL dashboards still deployed)
-                    console.print(
-                        "[green]✓[/green] Metrics will be sent directly to CloudWatch via local OTEL sidecar"
-                    )
-                    config["monitoring"]["vpc_config"] = None
-                    config["monitoring"]["custom_domain"] = None
-                    config["monitoring"]["hosted_zone_id"] = None
-                    if "analytics" not in config:
-                        config["analytics"] = {}
-                    config["analytics"]["enabled"] = False
-
-                # Quota monitoring configuration (both modes)
+                # Quota monitoring configuration
                 console.print("\n[bold]Quota Monitoring[/bold]")
                 console.print("Track per-user token consumption, set limits, and receive alerts")
                 console.print("when users approach or exceed their quotas.")

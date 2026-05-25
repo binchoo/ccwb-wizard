@@ -23,13 +23,21 @@ class Profile:
     schema_version: str = "2.0"  # Configuration schema version
     stack_names: dict[str, str] = field(default_factory=dict)
     monitoring_enabled: bool = True
-    monitoring_mode: str = "sidecar"  # "sidecar" (local collector) or "central" (ECS Fargate)
+    monitoring_mode: str = "bedrock-native"  # "bedrock-native" (default; Bedrock model invocation logging)
     monitoring_config: dict[str, Any] = field(default_factory=dict)
     analytics_enabled: bool = True  # Analytics pipeline for user metrics
-    metrics_log_group: str = "/aws/claude-code/metrics"
+    metrics_log_group: str = "/aws/bedrock/modelinvocations"
     data_retention_days: int = 90
     firehose_buffer_interval: int = 900
     analytics_debug_mode: bool = False
+
+    # Bedrock-native logging configuration (replaces OTEL pipeline as of v3.0)
+    # bedrock_logging_destination: where Bedrock writes invocation logs.
+    #   "cloudwatch" (default) — to CloudWatch Logs group named in metrics_log_group
+    #   "s3"                   — to an S3 bucket created by the bedrock-logging stack
+    #   "both"                 — to both targets
+    bedrock_logging_destination: str = "cloudwatch"
+
     allowed_bedrock_regions: list[str] = field(default_factory=list)
     cross_region_profile: str | None = None  # Cross-region profile: "us", "europe", "apac"
     selected_model: str | None = None  # Selected Claude model ID (e.g., "us.anthropic.claude-3-7-sonnet-20250805-v1:0")
