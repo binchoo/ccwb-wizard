@@ -11,7 +11,7 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: "pip"
-    directory: "/source"
+    directory: "/"
     schedule:
       interval: "weekly"
     commit-message:

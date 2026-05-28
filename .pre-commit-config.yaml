@@ -11,7 +11,6 @@ repos:
         name: Validate YAML syntax
         args: ['-d', 'relaxed']
         files: \.(yaml|yml)$
-        exclude: ^(source/build/|source/dist/)
 
   # CloudFormation template validation
   - repo: https://github.com/aws-cloudformation/cfn-lint
@@ -41,21 +40,14 @@ repos:
       - id: ruff
         name: Lint Python with Ruff (auto-fix)
         args: [--fix, --exit-non-zero-on-fix]
-        files: ^source/.*\.py$
-        exclude: ^source/(build|dist)/
+        files: ^(web/(domain|backend|binaries)/.*\.py|deployment/infrastructure/lambda-functions/.*\.py)$
 
       - id: ruff-format
         name: Format Python with Ruff
-        files: ^source/.*\.py$
-        exclude: ^source/(build|dist)/
+        files: ^(web/(domain|backend|binaries)/.*\.py|deployment/infrastructure/lambda-functions/.*\.py)$
 
-  # Comprehensive smoke tests (catches import errors, syntax errors, and instantiation issues)
-  - repo: local
-    hooks:
-      - id: test-smoke
-        name: Run comprehensive smoke tests
-        entry: bash -c 'cd source && poetry run python -m pytest tests/test_smoke.py -q'
-        language: system
-        files: ^source/(claude_code_with_bedrock/|credential_provider/).*\.py$
-        pass_filenames: false
-        # This test runs quickly (<1s) and catches critical errors before commit
+  # Note: smoke test hook removed by build-tooling unit.
+  # The legacy hook ran `cd source && poetry run python -m pytest tests/test_smoke.py -q`,
+  # which depended on the now-deleted source/ tree and on poetry. Subsequent
+  # units (Domain, Backend, Frontend, Credential-Provider Rewrite) are
+  # responsible for adding their own per-unit test hooks if desired.

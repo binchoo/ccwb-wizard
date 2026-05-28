@@ -82,3 +82,13 @@ PARTITION_*.md
 FEEDBACK.md
 .claudeignore
 .mcp.json
+
+# uv environment + lock backups
+.uv/
+*.uv.bak
+
+# pytest
+.pytest_cache/
+
+# Source dist (legacy fallback — source/ removed in build-tooling unit)
+source/
