@@ -1,0 +1,24 @@
+[project]
+name = "ccwb-wizard"
+version = "0.0.0"
+description = "FastAPI backend for ccwb web wizard"
+requires-python = ">=3.10,<3.13"
+license = { text = "MIT" }
+keywords = ["aws", "bedrock", "claude", "ccwb", "backend"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    # Empty — Backend unit will add via `uv add` (Q3=D).
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ccwb_wizard"]
