@@ -1,0 +1,20 @@
+[project]
+name = "ccwb-workspace"
+version = "0.0.0"
+description = "ccwb (Claude Code with Amazon Bedrock) — uv workspace root"
+requires-python = ">=3.10,<3.13"
+license = { text = "MIT" }
+keywords = ["aws", "bedrock", "claude", "ccwb"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[tool.uv.workspace]
+members = ["web/domain", "web/backend"]
