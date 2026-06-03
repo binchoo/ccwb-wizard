@@ -658,6 +658,43 @@ class MultiProviderAuth:
             # Non-fatal error - monitoring is optional
             self._debug_print(f"Warning: Could not save monitoring token: {e}")
 
+    def _refresh_magic_header(self, id_token, token_claims):
+        """Refresh ANTHROPIC_CUSTOM_HEADERS in settings.json at runtime.
+
+        This replaces the legacy install-time static substitution. Every successful
+        authentication now updates the magic header so new group memberships, role
+        changes, or email updates are reflected immediately in Bedrock invocation logs.
+
+        Non-fatal: if settings.json is missing or unwritable, skip silently.
+        """
+        try:
+            from credential_provider.bedrock_metadata import build_header_line, build_metadata_from_jwt
+
+            metadata = build_metadata_from_jwt(token_claims)
+            header_line = build_header_line(metadata)
+
+            # Locate settings.json (Claude Code standard location)
+            settings_path = Path.home() / ".claude" / "settings.json"
+            if not settings_path.exists():
+                self._debug_print("settings.json not found, skipping magic header refresh")
+                return
+
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            env_block = settings.get("env", {})
+            old_header = env_block.get("ANTHROPIC_CUSTOM_HEADERS", "")
+
+            if old_header == header_line:
+                self._debug_print("Magic header unchanged, no update needed")
+                return
+
+            env_block["ANTHROPIC_CUSTOM_HEADERS"] = header_line
+            settings["env"] = env_block
+            settings_path.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            self._debug_print("Refreshed ANTHROPIC_CUSTOM_HEADERS in settings.json")
+        except Exception as e:
+            # Non-fatal — credential issuance still succeeds even if header refresh fails
+            self._debug_print(f"Warning: Could not refresh magic header: {e}")
+
     def get_monitoring_token(self):
         """Retrieve valid monitoring token from configured storage"""
         try:
@@ -2011,6 +2048,10 @@ class MultiProviderAuth:
                         else:
                             self._handle_quota_warning(quota_result)
 
+                # Runtime magic header refresh on silent refresh too
+                if id_token and token_claims:
+                    self._refresh_magic_header(id_token, token_claims)
+
                 print(json.dumps(silent_creds))
                 return 0
 
@@ -2038,6 +2079,11 @@ class MultiProviderAuth:
 
             # Save monitoring token (non-blocking, failures don't affect AWS auth)
             self.save_monitoring_token(id_token, token_claims)
+
+            # Runtime magic header refresh (rule-of-thumb: install-time static → runtime dynamic)
+            # Every successful authentication refreshes the Bedrock metadata header so that
+            # new group memberships, role changes, etc. are reflected immediately.
+            self._refresh_magic_header(id_token, token_claims)
 
             # Output credentials
             # CodeQL: This is not a security issue - this is an AWS credential provider
