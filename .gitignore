@@ -51,7 +51,8 @@ FEEDBACK.md
 # Temporary test files
 output.json
 *.bak
-test_*.py
+# Note: "test_*.py" was previously gitignored (unknown reason — test files should be tracked).
+# Removed by domain unit.
 
 CLAUDE.md
 
@@ -62,8 +63,8 @@ parameters.json
 source/.ccwb-config/
 
 guidance-submission/
-tests/
-!source/tests/
+# Note: "tests/" was previously gitignored with an exception for source/tests/.
+# Both removed by build-tooling / domain unit — test directories are now tracked.
 assets/docs/planning
 
 .pytest_cache/
@@ -73,7 +74,7 @@ assets/docs/planning
 
 EPCC_*
 PRs/
-test_cognito_detection.py
+# Note: "test_cognito_detection.py" legacy ignore removed.
 
 # Development documentation (not for production)
 TESTING_*.md
