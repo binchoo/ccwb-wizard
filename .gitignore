@@ -93,3 +93,8 @@ FEEDBACK.md
 
 # Source dist (legacy fallback — source/ removed in build-tooling unit)
 source/
+
+# Frontend
+web/frontend/node_modules/
+web/frontend/dist/
+web/backend/ccwb_wizard/static/
