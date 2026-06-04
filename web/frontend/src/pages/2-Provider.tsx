@@ -6,6 +6,9 @@ import Input from "@cloudscape-design/components/input";
 import Header from "@cloudscape-design/components/header";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Spinner from "@cloudscape-design/components/spinner";
+import Button from "@cloudscape-design/components/button";
+import Alert from "@cloudscape-design/components/alert";
+import Box from "@cloudscape-design/components/box";
 import { useWizardStore } from "../store";
 import { getScenarios } from "../api";
 
@@ -162,25 +165,151 @@ export default function ProviderPage() {
             </>
           )}
 
-          {/* Non-Cognito: dynamic fields from provider strategy wizard_inputs */}
-          {providerType && providerType !== "cognito" && wizardInputs.map((field) => (
+          {providerType && providerType !== "cognito" ? (wizardInputs as Array<{name: string; label: string; help_text?: string; placeholder?: string; sensitive?: boolean}>).map((field) => (
             <FormField
-              key={field.name as string}
-              label={field.label as string}
-              constraintText={field.help_text as string || undefined}
+              key={field.name}
+              label={field.label}
+              constraintText={field.help_text || undefined}
               data-testid={`provider-${field.name}-field`}
             >
               <Input
-                value={(draft.provider?.[field.name as string] as string) || ""}
-                onChange={({ detail }) => updateProvider(field.name as string, detail.value)}
-                placeholder={field.placeholder as string || ""}
-                type={(field.sensitive as boolean) ? "password" : "text" as never}
+                value={(draft.provider?.[field.name] as string) || ""}
+                onChange={({ detail }) => updateProvider(field.name, detail.value)}
+                placeholder={field.placeholder || ""}
+                type={field.sensitive ? "password" : "text" as never}
                 data-testid={`provider-${field.name}-input`}
               />
             </FormField>
-          ))}
+          )) : null}
+
+          {/* IdP Connection Test */}
+          {providerType && draft.provider?.client_id && (
+            <ConnectionTest provider={draft.provider as Record<string, string>} />
+          )}
         </SpaceBetween>
       </Container>
+    </SpaceBetween>
+  );
+}
+
+
+// --- Connection Test Sub-component ---
+
+function ConnectionTest({ provider }: { provider: Record<string, string> }) {
+  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [claims, setClaims] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState("");
+
+  const handleTest = async () => {
+    setStatus("loading");
+    setClaims(null);
+    setError("");
+
+    try {
+      // Step 1: Get authorize URL from backend
+      const res = await fetch("/api/auth/test-connection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider }),
+      });
+      const data = await res.json();
+
+      if (data.status === "error") {
+        setStatus("error");
+        setError(data.error);
+        return;
+      }
+
+      if (!data.authorize_url) {
+        setStatus("error");
+        setError("No authorize URL returned");
+        return;
+      }
+
+      // Step 2: Open popup for OIDC login
+      const popup = window.open(data.authorize_url, "idp-test", "width=600,height=700,scrollbars=yes");
+
+      // Step 3: Listen for callback message from popup
+      const handleMessage = async (event: MessageEvent) => {
+        if (event.origin !== window.location.origin) return;
+        if (event.data?.type !== "oidc-callback") return;
+
+        window.removeEventListener("message", handleMessage);
+        popup?.close();
+
+        const code = event.data.code;
+        if (!code) {
+          setStatus("error");
+          setError(event.data.error || "No authorization code received");
+          return;
+        }
+
+        // Step 4: Exchange code for claims
+        const exchangeRes = await fetch("/api/auth/test-connection/exchange", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider, code, code_verifier: data.code_verifier || "" }),
+        });
+        const exchangeData = await exchangeRes.json();
+
+        if (exchangeData.status === "success") {
+          setStatus("success");
+          setClaims(exchangeData.claims);
+        } else {
+          setStatus("error");
+          setError(exchangeData.error || "Token exchange failed");
+        }
+      };
+
+      window.addEventListener("message", handleMessage);
+
+      // Timeout after 60s
+      setTimeout(() => {
+        window.removeEventListener("message", handleMessage);
+        if (status === "loading") {
+          popup?.close();
+          setStatus("error");
+          setError("연결 테스트 시간 초과 (60초). IdP 로그인을 완료하지 못했습니다.");
+        }
+      }, 60000);
+
+    } catch (e) {
+      setStatus("error");
+      setError((e as Error).message);
+    }
+  };
+
+  return (
+    <SpaceBetween size="s">
+      <Button
+        onClick={handleTest}
+        loading={status === "loading"}
+        iconName="external"
+        data-testid="test-connection-button"
+      >
+        IdP 연결 테스트
+      </Button>
+
+      {status === "success" && claims && (
+        <Container header={<Header variant="h3">✓ IdP 연결 성공 — JWT Claims</Header>}>
+          <SpaceBetween size="xs">
+            {Object.entries(claims).map(([key, value]) => (
+              <div key={key}>
+                <strong>{key}</strong>: {String(typeof value === "object" ? JSON.stringify(value) : value)}
+              </div>
+            ))}
+          </SpaceBetween>
+          <Box variant="small" color="text-body-secondary" margin={{ top: "s" }}>
+            이 claims가 Bedrock invocation 로그에 사용자 attribution으로 기록됩니다.
+          </Box>
+        </Container>
+      )}
+
+      {status === "error" && (
+        <Alert type="error" header="IdP 연결 실패" data-testid="connection-error">
+          {error}
+        </Alert>
+      )}
     </SpaceBetween>
   );
 }
