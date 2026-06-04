@@ -47,7 +47,7 @@ export default function ReviewPage() {
             <strong>Region:</strong> {draft.aws_region}<br />
             <strong>Stack:</strong> {draft.stack_base_name}<br />
             <strong>Provider:</strong> {(draft.provider?.type as string) || "미선택"}<br />
-            <strong>Model:</strong> {draft.model_id || "미선택"}<br />
+            <strong>Model:</strong> {draft.models?.sonnet || "미선택"} (Sonnet)<br />
             <strong>Logging:</strong> {draft.bedrock_logging?.destination || "미선택"}<br />
             <strong>Quota:</strong> {draft.quota ? "활성" : "비활성"}<br />
             <strong>Distribution:</strong> {(draft.distribution?.type as string) || "비활성"}<br />

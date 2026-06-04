@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import Container from "@cloudscape-design/components/container";
 import FormField from "@cloudscape-design/components/form-field";
 import Checkbox from "@cloudscape-design/components/checkbox";
@@ -11,6 +12,16 @@ import { useWizardStore } from "../store";
 
 export default function LoggingQuotaPage() {
   const { draft, updateDraft } = useWizardStore();
+  const [existingLogging, setExistingLogging] = useState<{ exists: boolean | "unknown"; destination?: string; cloudwatch_log_group?: string; s3_bucket?: string; detail?: string } | null>(null);
+
+  useEffect(() => {
+    if (draft.aws_region) {
+      fetch(`/api/aws/bedrock-logging-status?region=${draft.aws_region}`)
+        .then((r) => r.json())
+        .then(setExistingLogging)
+        .catch(() => setExistingLogging(null));
+    }
+  }, [draft.aws_region]);
 
   const dest = draft.bedrock_logging?.destination || "cloudwatch";
   const cwLogs = dest === "cloudwatch" || dest === "both";
@@ -27,6 +38,28 @@ export default function LoggingQuotaPage() {
 
   return (
     <SpaceBetween size="l">
+      {existingLogging?.exists === true && (
+        <Alert type="warning" header="기존 Bedrock Logging 설정 감지" data-testid="existing-logging-alert">
+          이 계정/리전({draft.aws_region})에 이미 Bedrock model invocation logging이 설정되어 있습니다.
+          현재 설정: <strong>{existingLogging.destination}</strong>
+          {existingLogging.cloudwatch_log_group && <> (CW: {existingLogging.cloudwatch_log_group})</>}
+          {existingLogging.s3_bucket && <> (S3: {existingLogging.s3_bucket})</>}
+          <br /><br />
+          <Checkbox
+            checked={draft.bedrock_logging?.skip_if_exists === true}
+            onChange={({ detail }) => updateDraft({ bedrock_logging: { ...draft.bedrock_logging, skip_if_exists: detail.checked } })}
+            data-testid="skip-if-exists-checkbox"
+          >
+            <strong>기존 설정 유지</strong> — Deploy 시 bedrock-logging 스택을 건너뜁니다 (기존 설정을 덮어쓰지 않음)
+          </Checkbox>
+        </Alert>
+      )}
+      {existingLogging?.exists === "unknown" && (
+        <Alert type="info" header="기존 Bedrock Logging 설정 확인 불가" data-testid="logging-check-unknown">
+          bedrock:GetModelInvocationLoggingConfiguration 권한이 없거나 조회에 실패했습니다. Deploy 전에 기존 설정 여부를 수동 확인하세요.
+        </Alert>
+      )}
+
       <Container header={<Header variant="h2">Bedrock Logging</Header>}>
         <SpaceBetween size="m">
           <FormField label="Logging Destination (최소 하나는 켜야 합니다)">
@@ -55,7 +88,7 @@ export default function LoggingQuotaPage() {
         </SpaceBetween>
       </Container>
 
-      <Container header={<Header variant="h2">Quota Monitoring</Header>}>
+      <Container header={<Header variant="h2" description="여기서 설정하는 값은 전체 사용자에게 적용되는 기본(default) 정책입니다. 개별 사용자/그룹별 세분화 정책은 Fine-grained Quotas를 활성화한 뒤 DynamoDB QuotaPolicies 테이블에서 관리합니다.">Quota Monitoring</Header>}>
         <SpaceBetween size="m">
           <Toggle checked={quotaEnabled} onChange={({ detail }) => updateDraft({ quota: detail.checked ? { monthly_token_limit: 225000000, daily_token_limit: 0, burst_buffer_percent: 10, daily_enforcement: "alert", monthly_enforcement: "block" } : null })} data-testid="quota-toggle">
             Quota 활성화

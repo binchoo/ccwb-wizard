@@ -29,8 +29,10 @@ class Config:
     # Page 2 — Identity Provider (polymorphic dict, dispatched by "type" key)
     provider: dict[str, Any] = field(default_factory=dict)
 
-    # Page 4 — Bedrock
-    model_id: str = ""
+    # Page 4 — Bedrock Models (tier별 3개)
+    models: dict[str, str] = field(
+        default_factory=lambda: {"haiku": "", "sonnet": "", "opus": ""}
+    )
     cross_region_profile: str = ""
     source_region: str = ""
     inference_profiles: dict[str, str | None] = field(

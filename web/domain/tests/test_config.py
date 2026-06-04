@@ -18,7 +18,7 @@ class TestConfigRoundtrip:
             aws_region="us-east-1",
             stack_base_name="test-stack",
             provider={"type": "okta", "domain": "test.okta.com", "client_id": "abc123"},
-            model_id="us.anthropic.claude-sonnet-4-6",
+            models={"sonnet": "us.anthropic.claude-sonnet-4-6", "haiku": "", "opus": ""},
             cross_region_profile="us",
             source_region="us-east-1",
         )
@@ -28,7 +28,7 @@ class TestConfigRoundtrip:
         loaded = Config.load(path)
         assert loaded.profile_name == "test-profile"
         assert loaded.provider == {"type": "okta", "domain": "test.okta.com", "client_id": "abc123"}
-        assert loaded.model_id == "us.anthropic.claude-sonnet-4-6"
+        assert loaded.models["sonnet"] == "us.anthropic.claude-sonnet-4-6"
 
     def test_schema_version_preserved(self, tmp_path: Path):
         cfg = Config(profile_name="v-test")

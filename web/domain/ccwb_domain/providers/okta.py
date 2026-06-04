@@ -52,14 +52,27 @@ class OktaProvider(IdentityProvider):
 
 
 def _allowed_regions(config: Any) -> list[str]:
-    """Derive AllowedBedrockRegions from config's model profile."""
+    """Derive AllowedBedrockRegions from config's model selections."""
     from ..bedrock_models import get_destination_regions_for_model_profile
 
-    try:
-        model_key = _resolve_model_key(config.model_id)
-        return get_destination_regions_for_model_profile(model_key, config.cross_region_profile)
-    except (ValueError, KeyError):
+    all_regions: set[str] = set()
+    models = getattr(config, "models", {})
+    profile = getattr(config, "cross_region_profile", "")
+
+    for tier, model_id in models.items():
+        if not model_id:
+            continue
+        model_key = _resolve_model_key(model_id)
+        if model_key and profile:
+            try:
+                regions = get_destination_regions_for_model_profile(model_key, profile)
+                all_regions.update(regions)
+            except (ValueError, KeyError):
+                pass
+
+    if not all_regions:
         return [config.source_region] if config.source_region else ["us-east-1"]
+    return sorted(all_regions)
 
 
 def _resolve_model_key(model_id: str) -> str:
@@ -75,17 +88,34 @@ def _resolve_model_key(model_id: str) -> str:
 
 def _common_settings_env(config: Any) -> dict[str, str]:
     """Common settings.json env block (rule-of-thumb §7)."""
-    env = {
+    env: dict[str, str] = {
         "AWS_PROFILE": "ClaudeCode",
         "AWS_REGION": config.source_region,
-        "ANTHROPIC_MODEL": config.model_id,
         "ANTHROPIC_CUSTOM_HEADERS": "__ANTHROPIC_CUSTOM_HEADERS__",
         "CLAUDE_CODE_USE_MANTLE": "0",
     }
-    if config.enable_cc_telemetry:
-        env["CLAUDE_CODE_ENABLE_TELEMETRY"] = "1"
-    else:
-        env["CLAUDE_CODE_ENABLE_TELEMETRY"] = "0"
+    # Tier-based model mapping
+    models = getattr(config, "models", {})
+    if models.get("sonnet"):
+        env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = models["sonnet"]
+        env["ANTHROPIC_MODEL"] = models["sonnet"]  # backward compat — default model = sonnet
+    if models.get("haiku"):
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = models["haiku"]
+    if models.get("opus"):
+        env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = models["opus"]
+
+    # Telemetry
+    env["CLAUDE_CODE_ENABLE_TELEMETRY"] = "1" if config.enable_cc_telemetry else "0"
+
+    # Application Inference Profile ARNs (optional — skip if null/empty)
+    inference_profiles = getattr(config, "inference_profiles", {})
+    if inference_profiles.get("opus"):
+        env["ANTHROPIC_OPUS_MODEL_ARN"] = inference_profiles["opus"]
+    if inference_profiles.get("sonnet"):
+        env["ANTHROPIC_SONNET_MODEL_ARN"] = inference_profiles["sonnet"]
+    if inference_profiles.get("haiku"):
+        env["ANTHROPIC_HAIKU_MODEL_ARN"] = inference_profiles["haiku"]
+
     return env
 
 

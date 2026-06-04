@@ -10,11 +10,11 @@ export interface ConfigDraft {
   aws_region: string;
   stack_base_name: string;
   provider: Record<string, unknown>;
-  model_id: string;
+  models: Record<string, string>;  // {haiku: "model_id", sonnet: "model_id", opus: "model_id"}
   cross_region_profile: string;
   source_region: string;
   inference_profiles: Record<string, string | null>;
-  bedrock_logging: { destination: string; retention_days: number };
+  bedrock_logging: { destination: string; retention_days: number; skip_if_exists?: boolean };
   quota: Record<string, unknown> | null;
   distribution: Record<string, unknown> | null;
   enable_codebuild_windows: boolean;
@@ -39,7 +39,7 @@ const EMPTY_DRAFT: ConfigDraft = {
   aws_region: "",
   stack_base_name: "",
   provider: {},
-  model_id: "",
+  models: { haiku: "", sonnet: "", opus: "" },
   cross_region_profile: "",
   source_region: "",
   inference_profiles: { opus: null, sonnet: null, haiku: null },

@@ -32,7 +32,7 @@ class TestOktaProvider:
         from ccwb_domain.providers.okta import OktaProvider
 
         p = OktaProvider(domain="test.okta.com", client_id="id123")
-        config = Config(profile_name="t", stack_base_name="test-stack", source_region="us-east-1", model_id="us.anthropic.claude-sonnet-4-6", cross_region_profile="us")
+        config = Config(profile_name="t", stack_base_name="test-stack", source_region="us-east-1", models={"sonnet": "us.anthropic.claude-sonnet-4-6", "haiku": "", "opus": ""}, cross_region_profile="us")
         params = p.cfn_parameters(config)
         assert params["OktaDomain"] == "test.okta.com"
         assert params["OktaClientId"] == "id123"
@@ -42,11 +42,14 @@ class TestOktaProvider:
         from ccwb_domain.providers.okta import OktaProvider
 
         p = OktaProvider(domain="x", client_id="y")
-        config = Config(profile_name="t", source_region="us-east-1", model_id="model-x")
+        config = Config(profile_name="t", source_region="us-east-1", models={"sonnet": "us.anthropic.claude-sonnet-4-6", "haiku": "us.anthropic.claude-haiku-4-5", "opus": ""})
         env = p.settings_env(config)
         assert env["AWS_PROFILE"] == "ClaudeCode"
         assert env["CLAUDE_CODE_USE_MANTLE"] == "0"
         assert env["AWS_REGION"] == "us-east-1"
+        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "us.anthropic.claude-sonnet-4-6"
+        assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "us.anthropic.claude-haiku-4-5"
+        assert "ANTHROPIC_DEFAULT_OPUS_MODEL" not in env  # empty = not included
 
     def test_wizard_inputs(self):
         from ccwb_domain.providers.okta import OktaProvider
@@ -79,7 +82,7 @@ class TestMaterialize:
             aws_region="us-east-1",
             stack_base_name="my-stack",
             provider={"type": "okta", "domain": "test.okta.com", "client_id": "abc123"},
-            model_id="us.anthropic.claude-sonnet-4-6",
+            models={"sonnet": "us.anthropic.claude-sonnet-4-6", "haiku": "", "opus": ""},
             cross_region_profile="us",
             source_region="us-east-1",
         )
@@ -97,7 +100,7 @@ class TestMaterialize:
             profile_name="det",
             stack_base_name="det-stack",
             provider={"type": "auth0", "domain": "x.auth0.com", "client_id": "id"},
-            model_id="us.anthropic.claude-sonnet-4-6",
+            models={"sonnet": "us.anthropic.claude-sonnet-4-6", "haiku": "", "opus": ""},
             cross_region_profile="us",
             source_region="us-east-1",
         )
@@ -112,7 +115,7 @@ class TestMaterialize:
             profile_name="q",
             stack_base_name="q-stack",
             provider={"type": "okta", "domain": "o.okta.com", "client_id": "c"},
-            model_id="us.anthropic.claude-sonnet-4-6",
+            models={"sonnet": "us.anthropic.claude-sonnet-4-6", "haiku": "", "opus": ""},
             cross_region_profile="us",
             source_region="us-east-1",
             quota={"monthly_token_limit": 100000000, "daily_token_limit": 5000000, "daily_enforcement": "alert", "monthly_enforcement": "block"},
