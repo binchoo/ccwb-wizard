@@ -300,10 +300,11 @@ class MultiProviderAuth:
         elif ptype == "cognito":
             domain = provider.get("user_pool_domain", "")
             region = file_config.get("aws_region", "us-east-1")
+            # credential-process prepends https:// itself, so store bare host
             if domain and "." not in domain:
-                profile_config["provider_domain"] = f"https://{domain}.auth.{region}.amazoncognito.com"
+                profile_config["provider_domain"] = f"{domain}.auth.{region}.amazoncognito.com"
             else:
-                profile_config["provider_domain"] = domain
+                profile_config["provider_domain"] = domain.replace("https://", "").replace("http://", "")
         elif ptype == "generic":
             profile_config["provider_domain"] = provider.get("issuer_url", "")
             profile_config["oidc_authorization_endpoint"] = provider.get("authorization_endpoint", "")

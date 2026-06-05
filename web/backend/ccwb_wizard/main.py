@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from .api import wizard, scenarios, aws_lookup, secret, auth_test, deploy, package
+from .api import wizard, scenarios, aws_lookup, secret, auth_test, deploy, package, distribute
 from .settings import HOST, PORT_RANGE_START, PORT_RANGE_END
 
 app = FastAPI(title="ccwb wizard", version="0.1.0")
@@ -28,6 +28,7 @@ app.include_router(secret.router, prefix="/api")
 app.include_router(auth_test.router, prefix="/api")
 app.include_router(deploy.router, prefix="/api")
 app.include_router(package.router, prefix="/api")
+app.include_router(distribute.router, prefix="/api")
 
 
 # Health check

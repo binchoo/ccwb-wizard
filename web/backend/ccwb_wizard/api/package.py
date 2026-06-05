@@ -61,6 +61,10 @@ def _build_binary(dist_dir: Path, platform_name: str) -> Path:
         "--workpath", str(dist_dir / "_build"),
         "--specpath", str(dist_dir / "_build"),
         "--clean",
+        "--collect-all", "keyring",
+        "--collect-all", "jwt",
+        "--collect-all", "cryptography",
+        "--hidden-import", "credential_provider.bedrock_metadata",
         str(CREDENTIAL_PROVIDER_DIR / "__main__.py"),
     ]
 
@@ -104,10 +108,12 @@ def _generate_config_json(config: Config) -> dict:
         profile_config["azure_auth_mode"] = provider.get("auth_mode", "public")
     elif ptype == "cognito":
         domain = provider.get("user_pool_domain", "")
+        # credential-process prepends https:// itself, so store bare host
         if domain and "." not in domain:
-            profile_config["provider_domain"] = f"https://{domain}.auth.{config.aws_region}.amazoncognito.com"
+            profile_config["provider_domain"] = f"{domain}.auth.{config.aws_region}.amazoncognito.com"
         else:
-            profile_config["provider_domain"] = domain
+            # Strip scheme if present (credential-process adds it)
+            profile_config["provider_domain"] = domain.replace("https://", "").replace("http://", "")
     elif ptype == "generic":
         profile_config["provider_domain"] = provider.get("issuer_url", "")
         profile_config["oidc_authorization_endpoint"] = provider.get("authorization_endpoint", "")
@@ -212,7 +218,9 @@ async def build_package(name: str) -> dict:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Binary build failed: {e}")
 
-    # 2. Write config.json
+    # 2. Write config.json (needs federated_role_arn from deployed auth stack)
+    # Reload profile to get synced outputs (e.g. federated_role_arn from deploy)
+    config = Config.load(path)
     config_json = _generate_config_json(config)
     (dist_dir / "config.json").write_text(
         json.dumps(config_json, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -227,14 +235,12 @@ async def build_package(name: str) -> dict:
     (dist_dir / "install.sh").write_text(INSTALL_SH_TEMPLATE, encoding="utf-8")
     (dist_dir / "install.sh").chmod(0o755)
 
-    # 5. Create zip
+    # 5. Create zip (exclude _build/ artifacts)
     zip_path = DIST_BASE / f"{name}-{platform_name}.zip"
-    shutil.make_archive(str(zip_path.with_suffix("")), "zip", str(dist_dir))
-
-    # Cleanup build artifacts
     build_dir = dist_dir / "_build"
     if build_dir.exists():
         shutil.rmtree(build_dir)
+    shutil.make_archive(str(zip_path.with_suffix("")), "zip", str(dist_dir))
 
     return {
         "status": "success",

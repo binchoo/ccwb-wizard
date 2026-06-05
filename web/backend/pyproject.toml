@@ -20,6 +20,9 @@ dependencies = [
     "pyjwt>=2.13.0",
     "requests>=2.34.2",
     "uvicorn>=0.48.0",
+    "keyring>=24.0.0",
+    "cryptography>=42.0.0",
+    "pyinstaller>=6.0.0",
 ]
 
 [build-system]

@@ -89,8 +89,9 @@ def _resolve_model_key(model_id: str) -> str:
 def _common_settings_env(config: Any) -> dict[str, str]:
     """Common settings.json env block (rule-of-thumb §7)."""
     env: dict[str, str] = {
-        "AWS_PROFILE": "ClaudeCode",
+        "AWS_PROFILE": config.profile_name,
         "AWS_REGION": config.source_region,
+        "CLAUDE_CODE_USE_BEDROCK": "1",
         "ANTHROPIC_CUSTOM_HEADERS": "__ANTHROPIC_CUSTOM_HEADERS__",
         "CLAUDE_CODE_USE_MANTLE": "0",
     }

@@ -73,3 +73,10 @@ export const getPackageStatus = (name: string) =>
   request<{ status: string; platform?: string; zip_path?: string; zip_size_mb?: number; contents?: string[] }>(
     `/profile/${name}/package/status`
   );
+
+
+// --- Distribute ---
+export const distributePackage = (name: string, expiryHours: number = 48) =>
+  request<{ status: string; presigned_url: string; expiry_hours: number; platform: string; bucket: string; s3_key: string; zip_size_mb: number }>(
+    `/profile/${name}/distribute?expiry_hours=${expiryHours}`, { method: "POST" }
+  );

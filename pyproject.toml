@@ -18,3 +18,8 @@ classifiers = [
 
 [tool.uv.workspace]
 members = ["web/domain", "web/backend"]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.20.0",
+]

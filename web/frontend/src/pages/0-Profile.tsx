@@ -7,11 +7,12 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 import RadioGroup from "@cloudscape-design/components/radio-group";
 import Select from "@cloudscape-design/components/select";
 import Alert from "@cloudscape-design/components/alert";
+import Button from "@cloudscape-design/components/button";
 import { useWizardStore, ConfigDraft } from "../store";
 import { listProfiles, getProfile } from "../api";
 
 export default function ProfilePage() {
-  const { draft, updateDraft, mode, setMode } = useWizardStore();
+  const { draft, updateDraft, mode, setMode, setStep } = useWizardStore();
   const [profiles, setProfiles] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -86,6 +87,12 @@ export default function ProfilePage() {
           )}
 
           {error && <Alert type="error">{error}</Alert>}
+
+          {(mode === "edit" || mode === "clone") && draft.profile_name && !loading && (
+            <Button variant="link" onClick={() => setStep(10)} iconName="arrow-right">
+              배포 및 테스트로 바로 이동
+            </Button>
+          )}
         </SpaceBetween>
       </Container>
     </SpaceBetween>

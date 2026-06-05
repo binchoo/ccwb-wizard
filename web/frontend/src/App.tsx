@@ -18,6 +18,7 @@ import DistributionPage from "./pages/6-Distribution";
 import FeaturesPage from "./pages/7-Features";
 import TagsPage from "./pages/8-Tags";
 import ReviewPage from "./pages/9-Review";
+import DeployTestPage from "./pages/10-DeployTest";
 
 const STEPS: WizardProps.Step[] = [
   { title: "프로필", description: "신규 생성, 기존 편집, 또는 복제 모드를 선택하고 프로필 이름을 결정합니다.", content: <ProfilePage /> },
@@ -30,6 +31,7 @@ const STEPS: WizardProps.Step[] = [
   { title: "추가 기능", description: "Windows 빌드(CodeBuild), Claude Cowork 3P MDM 설정 생성, 텔레메트리 등 선택적 기능을 토글합니다.", content: <FeaturesPage /> },
   { title: "리소스 태그", description: "모든 CloudFormation 스택에 일괄 적용될 AWS 리소스 태그를 정의합니다. 비용 추적 및 거버넌스에 활용됩니다.", content: <TagsPage /> },
   { title: "검토 및 저장", description: "입력한 모든 설정을 검토하고 materialize 결과(CFN 파라미터, settings.json)를 미리 확인한 뒤 프로필로 저장합니다.", content: <ReviewPage /> },
+  { title: "배포 및 테스트", description: "인프라 배포, 패키지 빌드, 로컬 테스트, 사용자 배포를 수행합니다.", content: <DeployTestPage />, isOptional: true },
 ];
 
 export default function App() {

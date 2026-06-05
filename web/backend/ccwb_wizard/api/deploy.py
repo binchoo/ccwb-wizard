@@ -268,6 +268,15 @@ async def deploy_profile(name: str):
         # Track S3 artifacts bucket name (from first stack output)
         s3_bucket = ""
 
+        # Pre-fetch S3 bucket from existing stack (if already deployed)
+        try:
+            s3_stack_name = f"{config.stack_base_name}-s3"
+            resp = cfn.describe_stacks(StackName=s3_stack_name)
+            outputs = {o["OutputKey"]: o["OutputValue"] for o in resp["Stacks"][0].get("Outputs", [])}
+            s3_bucket = outputs.get("CfnArtifactsBucket", "")
+        except Exception:
+            pass
+
         total = len(artifacts.stacks)
         for i, stack_plan in enumerate(artifacts.stacks, 1):
             # Skip bedrock-logging if already configured and skip_if_exists is set
