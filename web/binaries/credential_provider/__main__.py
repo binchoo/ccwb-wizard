@@ -184,11 +184,12 @@ class MultiProviderAuth:
             return None
 
     def _load_config(self):
-        """Load configuration from config.json.
+        """Load configuration from config.json or Config 3.0 profile.
 
         Priority:
         1. Same directory as the binary (for testing dist/ packages)
         2. ~/claude-code-with-bedrock/config.json (for installed packages)
+        3. ~/.ccwb/profiles/<profile>.json (Config schema 3.0 — wizard-generated)
         """
         # Try same directory as binary first (for testing)
         binary_dir = Path(__file__).parent if not getattr(sys, "frozen", False) else Path(sys.executable).parent
@@ -198,17 +199,25 @@ class MultiProviderAuth:
         if not config_path.exists():
             config_path = Path.home() / "claude-code-with-bedrock" / "config.json"
 
+        # Fall back to Config 3.0 profile (wizard-managed)
+        if not config_path.exists():
+            config_path = Path.home() / ".ccwb" / "profiles" / f"{self.profile}.json"
+
         if not config_path.exists():
             raise ValueError(
-                f"Configuration file not found in {binary_dir} or {Path.home() / 'claude-code-with-bedrock'}"
+                f"Configuration file not found in {binary_dir}, "
+                f"{Path.home() / 'claude-code-with-bedrock'}, or "
+                f"{Path.home() / '.ccwb' / 'profiles' / f'{self.profile}.json'}"
             )
 
         with open(config_path) as f:
             file_config = json.load(f)
 
-        # Handle new config format with profiles
-        if "profiles" in file_config:
-            # New format
+        # Handle Config 3.0 format (wizard-generated profile — has schema_version)
+        if file_config.get("schema_version") == "3.0":
+            profile_config = self._adapt_config_3_0(file_config)
+        elif "profiles" in file_config:
+            # New format with profiles key
             profiles = file_config.get("profiles", {})
             if self.profile not in profiles:
                 raise ValueError(f"Profile '{self.profile}' not found in configuration")
@@ -259,6 +268,51 @@ class MultiProviderAuth:
             except Exception as e:
                 self._debug_print(f"Warning: could not read client secret from keyring: {e}")
 
+        return profile_config
+
+    def _adapt_config_3_0(self, file_config: dict) -> dict:
+        """Adapt Config schema 3.0 (wizard-generated) to credential-process flat format.
+
+        Maps Config 3.0 fields:
+          provider.type, provider.domain/tenant_id/user_pool_domain, provider.client_id
+          → flat: provider_type, provider_domain, client_id, federated_role_arn, ...
+        Preserves attribution dict as-is for _refresh_magic_header.
+        """
+        provider = file_config.get("provider", {})
+        ptype = provider.get("type", "generic")
+
+        profile_config: dict = {}
+        profile_config["provider_type"] = ptype
+        profile_config["client_id"] = provider.get("client_id", "")
+        profile_config["federated_role_arn"] = provider.get("federated_role_arn", "")
+        profile_config["aws_region"] = file_config.get("aws_region", "us-east-1")
+        profile_config["credential_storage"] = "keyring"
+
+        # Map provider-specific domain field
+        if ptype == "okta":
+            profile_config["provider_domain"] = provider.get("domain", "")
+        elif ptype == "auth0":
+            profile_config["provider_domain"] = provider.get("domain", "")
+        elif ptype == "azure":
+            tenant = provider.get("tenant_id", "")
+            profile_config["provider_domain"] = f"https://login.microsoftonline.com/{tenant}" if tenant else ""
+            profile_config["azure_auth_mode"] = provider.get("auth_mode", "public")
+        elif ptype == "cognito":
+            domain = provider.get("user_pool_domain", "")
+            region = file_config.get("aws_region", "us-east-1")
+            if domain and "." not in domain:
+                profile_config["provider_domain"] = f"https://{domain}.auth.{region}.amazoncognito.com"
+            else:
+                profile_config["provider_domain"] = domain
+        elif ptype == "generic":
+            profile_config["provider_domain"] = provider.get("issuer_url", "")
+            profile_config["oidc_authorization_endpoint"] = provider.get("authorization_endpoint", "")
+            profile_config["oidc_token_endpoint"] = provider.get("token_endpoint", "")
+
+        # Pass through attribution config (consumed by _refresh_magic_header)
+        profile_config["attribution"] = file_config.get("attribution", {})
+
+        self._debug_print(f"Loaded Config 3.0 profile (provider_type={ptype})")
         return profile_config
 
     def _detect_federation_type(self, config):
@@ -670,7 +724,10 @@ class MultiProviderAuth:
         try:
             from credential_provider.bedrock_metadata import build_header_line, build_metadata_from_jwt
 
-            metadata = build_metadata_from_jwt(token_claims)
+            # Load attribution mapping from config (Config schema 3.0 dynamic binding)
+            attribution = self.config.get("attribution") or {}
+
+            metadata = build_metadata_from_jwt(token_claims, attribution=attribution if attribution else None)
             header_line = build_header_line(metadata)
 
             # Locate settings.json (Claude Code standard location)

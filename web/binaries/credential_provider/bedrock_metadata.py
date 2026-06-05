@@ -67,37 +67,84 @@ _BOILERPLATE_CLAIMS = frozenset(
 )
 
 
-def build_metadata_from_jwt(claims: dict) -> dict:
-    """Convert a JWT claims dict into Bedrock requestMetadata, passthrough-style.
+def build_metadata_from_jwt(claims: dict, attribution: dict | None = None) -> dict:
+    """Convert a JWT claims dict into Bedrock requestMetadata.
 
-    Strategy:
-      - Drop OIDC boilerplate claims (``iss``, ``exp``, ``nonce``, ...).
-      - Drop empty values (``None``, empty string, empty list).
-      - Coerce list values to a comma-joined string (e.g. ``cognito:groups``).
-      - Add three dashboard-compat aliases (``user``/``team``/``dept``) populated
-        from the most likely IdP claims if those keys are not already present.
-        Without these aliases the CFN metric filters in bedrock-logging.yaml
-        would not match anything for IdPs that publish ``email`` instead of
-        ``user`` etc.
-      - Hand off to ``sanitize_for_bedrock`` for AWS limit enforcement.
+    If ``attribution`` config is provided (from Config schema 3.0), operates in
+    **mapping mode**:
+      - ``attribution.mapping`` maps dashboard dimension keys (user/team/dept) to
+        specific IdP claim names. Only mapped dimensions are emitted under the
+        dashboard-standard keys.
+      - ``attribution.passthrough`` lists additional claim keys to forward under
+        their original names.
 
-    Whatever remains gets serialized into the magic header verbatim. CW Logs Insights
-    can address the resulting fields by their original IdP-published names, e.g.
-    ``requestMetadata.email`` or ``requestMetadata.\"custom:team\"`` — and dashboards
-    written against ``requestMetadata.user`` / ``requestMetadata.team`` / ``requestMetadata.dept``
-    keep working through the aliases.
+    If ``attribution`` is None or empty, falls back to **legacy passthrough mode**
+    (blacklist + auto-aliases) for backward compatibility with pre-3.0 configs.
+
+    In both modes, ``sanitize_for_bedrock`` enforces AWS limits (16 keys, 256 chars,
+    ASCII only).
     """
-    out: dict = {}
-    for key, value in claims.items():
-        if key in _BOILERPLATE_CLAIMS:
-            continue
-        if isinstance(value, (list, tuple)):
-            value = ",".join(str(item) for item in value if item not in (None, ""))
-        if value in (None, "", []):
-            continue
-        out[key] = value
-    _apply_dashboard_aliases(out, claims)
-    return sanitize_for_bedrock(out)
+    mapping = (attribution or {}).get("mapping", {})
+    passthrough = (attribution or {}).get("passthrough", [])
+    has_config = bool(mapping and any(mapping.values())) or bool(passthrough)
+
+    if has_config:
+        # --- Mapping mode (Config 3.0) ---
+        out: dict = {}
+
+        # 1. Apply dimension mapping: dashboard key ← IdP claim value
+        for dimension_key, claim_name in mapping.items():
+            if not claim_name:
+                continue
+            value = claims.get(claim_name)
+            if value is None or value == "" or value == []:
+                continue
+            out[dimension_key] = _flatten_value(claim_name, value)
+
+        # 2. Apply passthrough: forward under original claim names
+        for claim_key in passthrough:
+            if claim_key in out:
+                continue  # dimension mapping takes precedence
+            value = claims.get(claim_key)
+            if value is None or value == "" or value == []:
+                continue
+            out[claim_key] = _flatten_value(claim_key, value)
+
+        return sanitize_for_bedrock(out)
+    else:
+        # --- Legacy blacklist-passthrough mode (pre-3.0 compat) ---
+        out = {}
+        for key, value in claims.items():
+            if key in _BOILERPLATE_CLAIMS:
+                continue
+            flat = _flatten_value(key, value)
+            if flat in (None, "", []):
+                continue
+            out[key] = flat
+        _apply_dashboard_aliases(out, claims)
+        return sanitize_for_bedrock(out)
+
+
+def _flatten_value(key: str, value) -> str | None:
+    """Flatten complex claim values into Bedrock-safe strings.
+
+    - list of primitives → comma-joined (e.g. cognito:groups)
+    - list of dicts → extract key identifying fields from first element
+      (e.g. identities[0].userId, identities[0].providerName)
+    - dict → compact JSON (truncated by sanitize_for_bedrock if needed)
+    """
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return None
+        first = value[0]
+        if isinstance(first, dict):
+            useful_keys = ("userId", "providerName", "providerType")
+            parts = [f"{k}={first[k]}" for k in useful_keys if k in first and first[k]]
+            return ",".join(parts) if parts else json.dumps(first, separators=(",", ":"))
+        return ",".join(str(item) for item in value if item not in (None, ""))
+    if isinstance(value, dict):
+        return json.dumps(value, separators=(",", ":"), ensure_ascii=True)
+    return value
 
 
 # Dashboard-compat aliases: keys the CFN metric filters in bedrock-logging.yaml

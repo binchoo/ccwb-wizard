@@ -39,6 +39,17 @@ class Config:
         default_factory=lambda: {"opus": None, "sonnet": None, "haiku": None}
     )
 
+    # Page 2 (cont.) — Attribution mapping
+    # Maps dashboard dimension keys (user/team/dept) to IdP claim names,
+    # plus optional passthrough keys forwarded under their original names.
+    # credential-process reads this at each auth event (dynamic binding).
+    attribution: dict[str, Any] = field(
+        default_factory=lambda: {
+            "mapping": {"user": "", "team": "", "dept": ""},
+            "passthrough": [],
+        }
+    )
+
     # Page 5 — Bedrock Logging + Quota
     bedrock_logging: dict[str, Any] = field(
         default_factory=lambda: {"destination": "cloudwatch", "retention_days": 90}

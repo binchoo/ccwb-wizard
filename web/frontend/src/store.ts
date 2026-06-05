@@ -10,7 +10,11 @@ export interface ConfigDraft {
   aws_region: string;
   stack_base_name: string;
   provider: Record<string, unknown>;
-  models: Record<string, string>;  // {haiku: "model_id", sonnet: "model_id", opus: "model_id"}
+  attribution: {
+    mapping: { user: string; team: string; dept: string };
+    passthrough: string[];
+  };
+  models: Record<string, string>;
   cross_region_profile: string;
   source_region: string;
   inference_profiles: Record<string, string | null>;
@@ -39,6 +43,7 @@ const EMPTY_DRAFT: ConfigDraft = {
   aws_region: "",
   stack_base_name: "",
   provider: {},
+  attribution: { mapping: { user: "", team: "", dept: "" }, passthrough: [] },
   models: { haiku: "", sonnet: "", opus: "" },
   cross_region_profile: "",
   source_region: "",
