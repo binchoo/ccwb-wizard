@@ -16,7 +16,7 @@ Parameters:
 
   Region:
     Type: String
-    Default: !Ref AWS::Region
+    Default: us-east-1
     Description: AWS region the dashboard should query (matches bedrock-logging region).
 
 Resources:

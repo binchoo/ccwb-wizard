@@ -54,3 +54,22 @@ export const writeKeyring = (profileName: string, secretName: string, value: str
     method: "POST",
     body: JSON.stringify({ profile_name: profileName, secret_name: secretName, value }),
   });
+
+
+// --- Deploy ---
+export const deployProfile = (name: string) =>
+  fetch(`${BASE}/profile/${name}/deploy`, { method: "POST" });
+
+export const getDeployStatus = (name: string) =>
+  request<Array<{ stack_name: string; status: string; outputs: Record<string, string> }>>(`/profile/${name}/deploy/status`);
+
+// --- Package ---
+export const buildPackage = (name: string) =>
+  request<{ status: string; platform: string; zip_path: string; zip_size_mb: number; contents: string[] }>(
+    `/profile/${name}/package`, { method: "POST" }
+  );
+
+export const getPackageStatus = (name: string) =>
+  request<{ status: string; platform?: string; zip_path?: string; zip_size_mb?: number; contents?: string[] }>(
+    `/profile/${name}/package/status`
+  );

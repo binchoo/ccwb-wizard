@@ -19,7 +19,7 @@ class PresignedS3:
         return DEPLOYMENT / "presigned-s3-distribution.yaml"
 
     def cfn_parameters(self, config: Any) -> dict[str, str]:
-        return {"StackBaseName": config.stack_base_name}
+        return {"IdentityPoolName": config.stack_base_name}
 
 
 @dataclass

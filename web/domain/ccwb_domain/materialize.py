@@ -25,7 +25,7 @@ class StackPlan:
     stack_name: str
     template_path: Path
     parameters: dict[str, str]
-    capabilities: list[str] = field(default_factory=lambda: ["CAPABILITY_IAM"])
+    capabilities: list[str] = field(default_factory=lambda: ["CAPABILITY_NAMED_IAM"])
     tags: dict[str, str] = field(default_factory=dict)
 
 
@@ -70,7 +70,15 @@ def materialize(config: Config) -> DeploymentArtifacts:
 
     stacks: list[StackPlan] = []
 
-    # 1. Auth stack (always)
+    # 1. S3 bucket for CFN artifacts (needed by cloudformation package for Lambda code)
+    stacks.append(StackPlan(
+        stack_name=f"{config.stack_base_name}-s3",
+        template_path=DEPLOYMENT / "s3bucket.yaml",
+        parameters={},
+        tags=config.tags,
+    ))
+
+    # 2. Auth stack (always)
     stacks.append(StackPlan(
         stack_name=f"{config.stack_base_name}-auth",
         template_path=provider.cfn_template_path(),
@@ -79,7 +87,7 @@ def materialize(config: Config) -> DeploymentArtifacts:
         tags=config.tags,
     ))
 
-    # 2. Bedrock logging (always)
+    # 3. Bedrock logging (always)
     stacks.append(StackPlan(
         stack_name=f"{config.stack_base_name}-bedrock-logging",
         template_path=DEPLOYMENT / "bedrock-logging.yaml",
@@ -95,12 +103,15 @@ def materialize(config: Config) -> DeploymentArtifacts:
     stacks.append(StackPlan(
         stack_name=f"{config.stack_base_name}-dashboard",
         template_path=DEPLOYMENT / "claude-code-dashboard.yaml",
-        parameters={"ProfileName": config.profile_name},
+        parameters={"ProfileName": config.profile_name, "Region": config.aws_region},
         tags=config.tags,
     ))
 
     # 4. Quota (optional)
     if config.quota:
+        # Resolve OIDC issuer URL for JWT validation in quota Lambda
+        oidc_issuer = provider.oidc_issuer_url(config) if hasattr(provider, "oidc_issuer_url") else ""
+        oidc_client_id = config.provider.get("client_id", "")
         stacks.append(StackPlan(
             stack_name=f"{config.stack_base_name}-quota",
             template_path=DEPLOYMENT / "quota-monitoring.yaml",
@@ -110,6 +121,8 @@ def materialize(config: Config) -> DeploymentArtifacts:
                 "DailyEnforcementMode": config.quota.get("daily_enforcement", "alert"),
                 "MonthlyEnforcementMode": config.quota.get("monthly_enforcement", "block"),
                 "EnableFinegrainedQuotas": str(config.quota.get("enable_finegrained_quotas", False)).lower(),
+                "OidcIssuerUrl": oidc_issuer,
+                "OidcClientId": oidc_client_id,
             },
             tags=config.tags,
         ))
@@ -131,14 +144,6 @@ def materialize(config: Config) -> DeploymentArtifacts:
             parameters={"StackBaseName": config.stack_base_name},
             tags=config.tags,
         ))
-
-    # 7. S3 bucket (always)
-    stacks.append(StackPlan(
-        stack_name=f"{config.stack_base_name}-s3",
-        template_path=DEPLOYMENT / "s3bucket.yaml",
-        parameters={"StackBaseName": config.stack_base_name},
-        tags=config.tags,
-    ))
 
     # settings.json template
     settings_template = {"env": provider.settings_env(config)}

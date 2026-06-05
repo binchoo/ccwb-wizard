@@ -54,3 +54,7 @@ class IdentityProvider(ABC):
     @abstractmethod
     def from_dict(cls, data: dict) -> "IdentityProvider":
         """Construct an instance from a provider dict (Config.provider)."""
+
+    def oidc_issuer_url(self, config: Any) -> str:
+        """Return the OIDC issuer URL for this provider. Used by quota Lambda for JWT validation."""
+        return ""

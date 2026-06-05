@@ -26,8 +26,8 @@ class CognitoProvider(IdentityProvider):
     def cfn_parameters(self, config: Any) -> dict[str, str]:
         return {
             "CognitoUserPoolId": self.user_pool_id,
-            "CognitoClientId": self.client_id,
-            "UserPoolDomain": self.user_pool_domain,
+            "CognitoUserPoolClientId": self.client_id,
+            "CognitoUserPoolDomain": self.user_pool_domain,
             "IdentityPoolName": config.stack_base_name,
             "AllowedBedrockRegions": ",".join(_allowed_regions(config)),
             "EnableMonitoring": "true",
@@ -55,3 +55,7 @@ class CognitoProvider(IdentityProvider):
             client_id=data.get("client_id", ""),
             user_pool_domain=data.get("user_pool_domain", ""),
         )
+
+    def oidc_issuer_url(self, config: Any) -> str:
+        region = self.user_pool_id.split("_")[0] if "_" in self.user_pool_id else config.aws_region
+        return f"https://cognito-idp.{region}.amazonaws.com/{self.user_pool_id}"

@@ -190,6 +190,11 @@ export default function ProviderPage() {
               awsRegion={draft.aws_region}
             />
           )}
+
+          {/* Attribution Mapping — always visible if mapping exists or test succeeded */}
+          {providerType && draft.provider?.client_id && (
+            <AttributionMappingEditor />
+          )}
         </SpaceBetween>
       </Container>
     </SpaceBetween>
@@ -209,6 +214,7 @@ function ConnectionTest({
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [claims, setClaims] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
+  const { setLastClaimKeys } = useWizardStore();
 
   const handleTest = async () => {
     setStatus("loading");
@@ -295,6 +301,7 @@ function ConnectionTest({
         if (exchangeData.status === "success") {
           setStatus("success");
           setClaims(exchangeData.claims);
+          setLastClaimKeys(Object.keys(exchangeData.claims));
         } else {
           setStatus("error");
           setError(exchangeData.error || "Token exchange failed");
@@ -352,7 +359,6 @@ function ConnectionTest({
           <Box variant="small" color="text-body-secondary" margin={{ top: "s" }}>
             이 claims가 Bedrock invocation 로그에 사용자 attribution으로 기록됩니다.
           </Box>
-          <AttributionMappingEditor claimKeys={Object.keys(claims)} />
         </Container>
       )}
 
@@ -377,8 +383,8 @@ const DIMENSION_LABELS: Record<string, { label: string; description: string }> =
 /** Claims that carry low attribution value and are noisy in headers. */
 const DISCOURAGED_CLAIMS = new Set(["email_verified", "identities", "origin_jti", "at_hash", "c_hash"]);
 
-function AttributionMappingEditor({ claimKeys }: { claimKeys: string[] }) {
-  const { draft, updateDraft } = useWizardStore();
+function AttributionMappingEditor() {
+  const { draft, updateDraft, lastClaimKeys } = useWizardStore();
   const attribution = draft.attribution || { mapping: { user: "", team: "", dept: "" }, passthrough: [] };
   const mapping = attribution.mapping || { user: "", team: "", dept: "" };
   const passthrough = new Set(attribution.passthrough || []);
@@ -394,17 +400,27 @@ function AttributionMappingEditor({ claimKeys }: { claimKeys: string[] }) {
     updateDraft({ attribution: { ...attribution, passthrough: [...next] } });
   };
 
+  // Build full list of known claim keys: from test + from already-saved mapping/passthrough
+  const savedKeys = [
+    ...Object.values(mapping).filter(Boolean),
+    ...Array.from(passthrough),
+  ];
+  const allClaimKeys = [...new Set([...lastClaimKeys, ...savedKeys])];
+
+  // If no claim keys at all (no test, no saved mapping), show minimal editor with text inputs
+  const hasOptions = allClaimKeys.length > 0;
+
   // Claim options for dropdowns (with empty option)
   const claimOptions = [
     { value: "", label: "(매핑 안 함)" },
-    ...claimKeys
+    ...allClaimKeys
       .filter((k) => !DISCOURAGED_CLAIMS.has(k))
       .map((k) => ({ value: k, label: k })),
   ];
 
   // Passthrough candidates: all claims NOT already used in mapping
   const mappedValues = new Set(Object.values(mapping).filter(Boolean));
-  const passthroughCandidates = claimKeys.filter(
+  const passthroughCandidates = allClaimKeys.filter(
     (k) => !mappedValues.has(k) && !DISCOURAGED_CLAIMS.has(k)
   );
 

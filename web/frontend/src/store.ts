@@ -31,10 +31,12 @@ interface WizardState {
   currentStep: number;
   draft: ConfigDraft;
   mode: "new" | "edit" | "clone";
+  lastClaimKeys: string[];  // claim keys from last successful IdP test
   setStep: (step: number) => void;
   updateDraft: (partial: Partial<ConfigDraft>) => void;
   resetDraft: () => void;
   setMode: (mode: "new" | "edit" | "clone") => void;
+  setLastClaimKeys: (keys: string[]) => void;
 }
 
 const EMPTY_DRAFT: ConfigDraft = {
@@ -61,8 +63,10 @@ export const useWizardStore = create<WizardState>((set) => ({
   currentStep: 0,
   draft: { ...EMPTY_DRAFT },
   mode: "new",
+  lastClaimKeys: [],
   setStep: (step) => set({ currentStep: step }),
   updateDraft: (partial) => set((s) => ({ draft: { ...s.draft, ...partial } })),
-  resetDraft: () => set({ draft: { ...EMPTY_DRAFT }, currentStep: 0, mode: "new" }),
+  resetDraft: () => set({ draft: { ...EMPTY_DRAFT }, currentStep: 0, mode: "new", lastClaimKeys: [] }),
   setMode: (mode) => set({ mode }),
+  setLastClaimKeys: (keys) => set({ lastClaimKeys: keys }),
 }));
