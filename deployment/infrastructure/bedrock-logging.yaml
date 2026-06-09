@@ -36,6 +36,16 @@ Parameters:
     Default: ClaudeCodeBedrock
     Description: CloudWatch metric namespace published by metric filters on the invocation log group.
 
+  ExistingLogGroupName:
+    Type: String
+    Default: ""
+    Description: >
+      Name of an existing CloudWatch Logs group that already receives Bedrock invocation
+      logs (e.g. when logging was configured by a prior deployment). When set, this stack
+      reuses that log group for metric filters instead of creating a new one, and skips
+      re-configuring the model invocation logging destination. Leave empty to create a new
+      log group and configure logging from scratch.
+
 
 Conditions:
   EnableCloudWatchLogs: !Or
@@ -44,6 +54,17 @@ Conditions:
   EnableS3Logs: !Or
     - !Equals [!Ref BedrockLoggingDestination, s3]
     - !Equals [!Ref BedrockLoggingDestination, both]
+  # True when an existing log group name was supplied (reuse mode).
+  UseExistingLogGroup: !Not [!Equals [!Ref ExistingLogGroupName, ""]]
+  # Create a new log group only when CW logging is enabled AND no existing group was given.
+  CreateNewLogGroup: !And
+    - !Condition EnableCloudWatchLogs
+    - !Not [!Condition UseExistingLogGroup]
+  # Run the logging-config custom resource only when we own the log group (new group).
+  # In reuse mode the destination is assumed already configured by the prior deployment.
+  ConfigureLogging: !Or
+    - !Condition CreateNewLogGroup
+    - !Condition EnableS3Logs
 
 Resources:
   # ---------------------------------------------------------------
@@ -51,7 +72,7 @@ Resources:
   # ---------------------------------------------------------------
   InvocationLogsLogGroup:
     Type: AWS::Logs::LogGroup
-    Condition: EnableCloudWatchLogs
+    Condition: CreateNewLogGroup
     Properties:
       LogGroupName: !Sub /aws/bedrock/modelinvocations/${ProfileName}
       RetentionInDays: !Ref DataRetentionDays
@@ -84,6 +105,7 @@ Resources:
   # ---------------------------------------------------------------
   BedrockLoggingRole:
     Type: AWS::IAM::Role
+    Condition: ConfigureLogging
     Properties:
       RoleName: !Sub ${ProfileName}-bedrock-logging-role
       AssumeRolePolicyDocument:
@@ -100,7 +122,7 @@ Resources:
                 aws:SourceArn: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:*
       Policies:
         - !If
-          - EnableCloudWatchLogs
+          - CreateNewLogGroup
           - PolicyName: WriteCloudWatchLogs
             PolicyDocument:
               Version: '2012-10-17'
@@ -134,6 +156,7 @@ Resources:
   # ---------------------------------------------------------------
   EnableLoggingFunctionRole:
     Type: AWS::IAM::Role
+    Condition: ConfigureLogging
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -164,6 +187,7 @@ Resources:
 
   EnableLoggingFunction:
     Type: AWS::Lambda::Function
+    Condition: ConfigureLogging
     Properties:
       FunctionName: !Sub ${ProfileName}-bedrock-logging-config
       Runtime: python3.12
@@ -178,13 +202,14 @@ Resources:
 
   EnableLoggingCustomResource:
     Type: Custom::BedrockModelInvocationLogging
+    Condition: ConfigureLogging
     DependsOn:
       - BedrockLoggingRole
     Properties:
       ServiceToken: !GetAtt EnableLoggingFunction.Arn
       Destination: !Ref BedrockLoggingDestination
       RoleArn: !GetAtt BedrockLoggingRole.Arn
-      LogGroupName: !If [EnableCloudWatchLogs, !Ref InvocationLogsLogGroup, !Ref AWS::NoValue]
+      LogGroupName: !If [CreateNewLogGroup, !Ref InvocationLogsLogGroup, !Ref AWS::NoValue]
       S3BucketName: !If [EnableS3Logs, !Ref InvocationLogsBucket, !Ref AWS::NoValue]
       EmbedTextToggles:
         ImageDataDeliveryEnabled: false
@@ -202,7 +227,7 @@ Resources:
     Type: AWS::Logs::MetricFilter
     Condition: EnableCloudWatchLogs
     Properties:
-      LogGroupName: !Ref InvocationLogsLogGroup
+      LogGroupName: !If [UseExistingLogGroup, !Ref ExistingLogGroupName, !Ref InvocationLogsLogGroup]
       FilterName: !Sub ${ProfileName}-input-tokens-by-user
       FilterPattern: '{ ($.requestMetadata.user = "*") && ($.input.inputTokenCount = *) }'
       MetricTransformations:
@@ -222,7 +247,7 @@ Resources:
     Type: AWS::Logs::MetricFilter
     Condition: EnableCloudWatchLogs
     Properties:
-      LogGroupName: !Ref InvocationLogsLogGroup
+      LogGroupName: !If [UseExistingLogGroup, !Ref ExistingLogGroupName, !Ref InvocationLogsLogGroup]
       FilterName: !Sub ${ProfileName}-output-tokens-by-user
       FilterPattern: '{ ($.requestMetadata.user = "*") && ($.output.outputTokenCount = *) }'
       MetricTransformations:
@@ -242,7 +267,7 @@ Resources:
     Type: AWS::Logs::MetricFilter
     Condition: EnableCloudWatchLogs
     Properties:
-      LogGroupName: !Ref InvocationLogsLogGroup
+      LogGroupName: !If [UseExistingLogGroup, !Ref ExistingLogGroupName, !Ref InvocationLogsLogGroup]
       FilterName: !Sub ${ProfileName}-invocation-count
       FilterPattern: '{ ($.requestMetadata.user = "*") }'
       MetricTransformations:
@@ -264,7 +289,7 @@ Resources:
     Type: AWS::Logs::MetricFilter
     Condition: EnableCloudWatchLogs
     Properties:
-      LogGroupName: !Ref InvocationLogsLogGroup
+      LogGroupName: !If [UseExistingLogGroup, !Ref ExistingLogGroupName, !Ref InvocationLogsLogGroup]
       FilterName: !Sub ${ProfileName}-untagged-invocations
       FilterPattern: '{ $.requestMetadata NOT EXISTS }'
       MetricTransformations:
@@ -295,7 +320,7 @@ Resources:
 Outputs:
   LogGroupName:
     Condition: EnableCloudWatchLogs
-    Value: !Ref InvocationLogsLogGroup
+    Value: !If [UseExistingLogGroup, !Ref ExistingLogGroupName, !Ref InvocationLogsLogGroup]
     Description: CloudWatch Logs group receiving Bedrock model invocation logs.
     Export:
       Name: !Sub ${AWS::StackName}-LogGroupName
@@ -314,6 +339,7 @@ Outputs:
       Name: !Sub ${AWS::StackName}-MetricNamespace
 
   BedrockLoggingRoleArn:
+    Condition: ConfigureLogging
     Value: !GetAtt BedrockLoggingRole.Arn
     Description: IAM role assumed by Bedrock to write logs.
     Export:

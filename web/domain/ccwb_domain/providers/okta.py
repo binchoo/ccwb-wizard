@@ -93,13 +93,21 @@ def _common_settings_env(config: Any) -> dict[str, str]:
         "AWS_REGION": config.source_region,
         "CLAUDE_CODE_USE_BEDROCK": "1",
         "ANTHROPIC_CUSTOM_HEADERS": "__ANTHROPIC_CUSTOM_HEADERS__",
+        # Mantle is Claude Code's alternative (Anthropic-gateway) model-routing path.
+        # This deployment routes model access exclusively through Amazon Bedrock
+        # (CLAUDE_CODE_USE_BEDROCK=1), so Mantle is pinned OFF to keep routing
+        # unambiguous and deterministic — preventing an inherited user/global
+        # CLAUDE_CODE_USE_MANTLE=1 from silently competing with the Bedrock path.
+        # See settings.json reference in USER_LIFECYCLE_RUNBOOK.md.
         "CLAUDE_CODE_USE_MANTLE": "0",
     }
-    # Tier-based model mapping
+    # Tier-based model mapping.
+    # Only the tier-specific keys (ANTHROPIC_DEFAULT_{SONNET,HAIKU,OPUS}_MODEL) are
+    # emitted. The legacy catch-all ANTHROPIC_MODEL is intentionally NOT set: it
+    # duplicated the sonnet value and is redundant with ANTHROPIC_DEFAULT_SONNET_MODEL.
     models = getattr(config, "models", {})
     if models.get("sonnet"):
         env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = models["sonnet"]
-        env["ANTHROPIC_MODEL"] = models["sonnet"]  # backward compat — default model = sonnet
     if models.get("haiku"):
         env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = models["haiku"]
     if models.get("opus"):

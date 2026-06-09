@@ -38,19 +38,47 @@ METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "ClaudeCodeBedrock")
 cloudwatch_client = boto3.client("cloudwatch", region_name=METRICS_REGION)
 
 
-def _list_known_users() -> list[str]:
-    """Discover users to query by scanning the UserQuotaMetrics table.
+def _discover_users_from_metrics() -> set[str]:
+    """Discover users from the CloudWatch metric dimensions themselves.
 
-    GetMetricData requires us to enumerate dimension values up front — there's no
-    "give me all values for the User dimension" API. We use the DynamoDB table as
-    the source of truth for who exists, since first-time users won't be in any
-    metric filter result anyway.
-
-    For very fresh deployments with empty DynamoDB this returns []. The first
-    invocation that creates the user record will become discoverable on the
-    next quota_monitor run (15 min cadence) — acceptable lag.
+    The bedrock-logging metric filters emit ``InputTokensByUser`` in the
+    ``ClaudeCodeBedrock`` namespace with a ``User`` dimension equal to
+    ``$.requestMetadata.user`` (the ccwb identity contract). ListMetrics returns
+    every metric+dimension combination already observed, so we can enumerate the
+    set of ``User`` values WITHOUT knowing them in advance — this is what breaks
+    the empty-table bootstrap deadlock (GetMetricData needs explicit dimensions).
     """
     seen: set[str] = set()
+    try:
+        paginator = cloudwatch_client.get_paginator("list_metrics")
+        for page in paginator.paginate(
+            Namespace=METRIC_NAMESPACE,
+            MetricName="InputTokensByUser",
+        ):
+            for metric in page.get("Metrics", []):
+                for dim in metric.get("Dimensions", []):
+                    if dim.get("Name") == "User" and dim.get("Value"):
+                        seen.add(dim["Value"])
+    except Exception as e:
+        print(f"[WARN] Failed to discover users from CloudWatch metrics: {e}")
+    return seen
+
+
+def _list_known_users() -> list[str]:
+    """Discover users to query for usage aggregation.
+
+    Union of two sources:
+      1. CloudWatch metric dimensions (``ClaudeCodeBedrock/InputTokensByUser`` →
+         ``User``) — the authoritative, self-bootstrapping source based on the
+         identity contract carried in Bedrock invocation logs.
+      2. The UserQuotaMetrics table — retains users who have history but produced
+         no traffic in the current ListMetrics window.
+
+    GetMetricData requires dimension values up front, so source (1) is what makes
+    a fresh/empty deployment work: users appear as soon as they generate their
+    first attributed Bedrock invocation, with no manual seeding.
+    """
+    seen: set[str] = _discover_users_from_metrics()
     try:
         # Scan rather than Query because we want unique users across all months.
         # Cardinality is bounded by user count (PoC scale), and projection trims payload.

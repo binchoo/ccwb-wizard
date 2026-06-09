@@ -44,12 +44,13 @@ class TestOktaProvider:
         p = OktaProvider(domain="x", client_id="y")
         config = Config(profile_name="t", source_region="us-east-1", models={"sonnet": "us.anthropic.claude-sonnet-4-6", "haiku": "us.anthropic.claude-haiku-4-5", "opus": ""})
         env = p.settings_env(config)
-        assert env["AWS_PROFILE"] == "ClaudeCode"
+        assert env["AWS_PROFILE"] == "t"
         assert env["CLAUDE_CODE_USE_MANTLE"] == "0"
         assert env["AWS_REGION"] == "us-east-1"
         assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "us.anthropic.claude-sonnet-4-6"
         assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "us.anthropic.claude-haiku-4-5"
         assert "ANTHROPIC_DEFAULT_OPUS_MODEL" not in env  # empty = not included
+        assert "ANTHROPIC_MODEL" not in env  # removed: duplicated sonnet, redundant
 
     def test_wizard_inputs(self):
         from ccwb_domain.providers.okta import OktaProvider

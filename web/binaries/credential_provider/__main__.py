@@ -313,6 +313,16 @@ class MultiProviderAuth:
         # Pass through attribution config (consumed by _refresh_magic_header)
         profile_config["attribution"] = file_config.get("attribution", {})
 
+        # Quota enforcement wiring (consumed by _should_check_quota / _check_quota).
+        # Flat keys are derived from the Config 3.0 quota dict; quota_api_endpoint is the
+        # gate — absent => quota checks are skipped.
+        quota = file_config.get("quota") or {}
+        if quota.get("api_endpoint"):
+            profile_config["quota_api_endpoint"] = quota["api_endpoint"]
+            profile_config["quota_check_interval"] = quota.get("check_interval", 30)
+            profile_config["quota_fail_mode"] = quota.get("fail_mode", "open")
+            profile_config["quota_check_timeout"] = quota.get("check_timeout", 5)
+
         self._debug_print(f"Loaded Config 3.0 profile (provider_type={ptype})")
         return profile_config
 
@@ -1635,7 +1645,7 @@ class MultiProviderAuth:
 
         return list(set(groups))  # Remove duplicates
 
-    def _check_quota(self, token_claims: dict, id_token: str) -> dict:
+    def _check_quota(self, token_claims: dict, id_token: str, log: bool = True) -> dict:
         """Check user quota via the quota check API.
 
         Args:
@@ -1669,6 +1679,8 @@ class MultiProviderAuth:
             if response.status_code == 200:
                 result = response.json()
                 self._debug_print(f"Quota check result: allowed={result.get('allowed')}, reason={result.get('reason')}")
+                if log:
+                    self._log_quota_status(result)
                 return result
             elif response.status_code == 401:
                 # JWT validation failed at API Gateway
@@ -1720,6 +1732,41 @@ class MultiProviderAuth:
                     "message": f"Quota check failed: {e}"
                 }
             return {"allowed": True, "reason": "error"}
+
+    def _log_quota_status(self, quota_result: dict, stream=None) -> None:
+        """Emit a one-line quota status on every quota check.
+
+        In normal credential_process mode stdout is reserved for the AWS credential
+        JSON, so the default stream is stderr. The --refresh-identity maintenance
+        command has no credential-JSON contract on stdout, so it passes
+        ``stream=sys.stdout`` to surface the status as that command's output.
+
+        Two-state verdict (no enforcement-policy injection needed):
+          PASS  — credentials will be issued
+          ABORT — issuance is blocked by quota
+        """
+        out = stream or sys.stderr
+        try:
+            allowed = quota_result.get("allowed", True)
+            verdict = "PASS" if allowed else "ABORT"
+            usage = quota_result.get("usage") or {}
+            parts = []
+            if "monthly_tokens" in usage and "monthly_limit" in usage:
+                parts.append(
+                    f"monthly {usage['monthly_tokens']:,}/{usage['monthly_limit']:,} "
+                    f"({usage.get('monthly_percent', 0):.1f}%)"
+                )
+            if usage.get("daily_limit"):
+                parts.append(
+                    f"daily {usage.get('daily_tokens', 0):,}/{usage['daily_limit']:,} "
+                    f"({usage.get('daily_percent', 0):.1f}%)"
+                )
+            usage_str = " · ".join(parts) if parts else "usage n/a"
+            reason = quota_result.get("reason")
+            suffix = f" [{reason}]" if (not allowed and reason) else ""
+            print(f"[quota] {verdict} — {usage_str}{suffix}", file=out)
+        except Exception as e:
+            self._debug_print(f"Could not log quota status: {e}")
 
     def _handle_quota_blocked(self, quota_result: dict) -> int:
         """Handle blocked quota by displaying user-friendly message.
@@ -2210,6 +2257,17 @@ def main():
         "--clear-cache", action="store_true", help="Clear cached credentials and force re-authentication"
     )
     parser.add_argument(
+        "--refresh-identity",
+        action="store_true",
+        help=(
+            "Re-authenticate from scratch to pull fresh JWT claims (team/dept/etc.) and "
+            "rewrite the ANTHROPIC_CUSTOM_HEADERS magic header in ~/.claude/settings.json. "
+            "Use after an organization change (new team/department). Clears cached "
+            "credentials + id_token first, then opens the browser for a full login. "
+            "Does NOT print AWS credentials — prints a human-readable identity summary."
+        ),
+    )
+    parser.add_argument(
         "--check-expiration",
         action="store_true",
         help="Check if credentials need refresh (exit 0 if valid, 1 if expired)",
@@ -2276,6 +2334,79 @@ def main():
                 print(f"  • {item}", file=sys.stderr)
         else:
             print(f"No cached credentials found for profile '{args.profile}'", file=sys.stderr)
+        sys.exit(0)
+
+    # Handle identity refresh request (operator/user-facing maintenance command).
+    #
+    # Forces a full re-authentication so updated JWT claims (team/dept/email/etc.)
+    # are pulled fresh, then rewrites the ANTHROPIC_CUSTOM_HEADERS magic header in
+    # ~/.claude/settings.json. Intended for use after an organization change.
+    #
+    # Differs from the normal credential_process flow:
+    #   - Clears cached STS creds AND id_token first (so stale claims can't be reused
+    #     by the silent-refresh path).
+    #   - Refreshes the magic header BEFORE persisting credentials, so a keychain
+    #     write failure does not prevent the header (the whole point) from updating.
+    #   - Prints a human-readable identity summary to stderr, NOT raw AWS credentials.
+    if args.refresh_identity:
+        from credential_provider.bedrock_metadata import build_header_line, build_metadata_from_jwt
+
+        # 1) Invalidate any cached STS creds + id_token so we re-pull fresh claims.
+        auth.clear_cached_credentials()
+
+        # 2) Full OIDC login (opens browser). Fresh id_token => fresh claims.
+        try:
+            id_token, token_claims = auth.authenticate_oidc()
+        except KeyboardInterrupt:
+            print("Identity refresh cancelled by user.", file=sys.stderr)
+            sys.exit(130)
+        except Exception as e:
+            print(f"Identity refresh failed during authentication: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        if not id_token or not token_claims:
+            print("Identity refresh failed: no id_token/claims obtained.", file=sys.stderr)
+            sys.exit(1)
+
+        # 3) Rewrite the magic header FIRST (independent of keychain).
+        auth._refresh_magic_header(id_token, token_claims)
+
+        # 4) Best-effort: issue + persist credentials so the session is ready to use.
+        #    Non-fatal — the identity (header) is already refreshed above.
+        try:
+            credentials = auth.get_aws_credentials(id_token, token_claims)
+            auth.save_credentials(credentials)
+            auth.save_monitoring_token(id_token, token_claims)
+        except Exception as e:
+            print(
+                f"Note: identity/header refreshed, but caching credentials failed ({e}). "
+                "Next Claude Code run will re-issue credentials.",
+                file=sys.stderr,
+            )
+
+        # 5) Quota status report (if quota enforcement is configured for this profile).
+        #    refresh-identity has no credential-JSON contract on stdout, so the quota
+        #    status is emitted to STDOUT as this command's machine/human output.
+        #    Reporting only — the refresh is not gated on quota (gating happens at
+        #    credential_process time).
+        if auth._should_check_quota():
+            try:
+                quota_result = auth._check_quota(token_claims, id_token, log=False)
+                auth._log_quota_status(quota_result, stream=sys.stdout)
+            except Exception as e:
+                auth._debug_print(f"Quota status report failed: {e}")
+
+        # 6) Human-readable summary (no raw credentials).
+        attribution = auth.config.get("attribution") or {}
+        metadata = build_metadata_from_jwt(token_claims, attribution=attribution if attribution else None)
+        print("✓ Identity refreshed. New attribution written to ~/.claude/settings.json:", file=sys.stderr)
+        for key in ("user", "team", "dept"):
+            if metadata.get(key):
+                print(f"    {key}: {metadata[key]}", file=sys.stderr)
+        extra = [k for k in metadata if k not in ("user", "team", "dept")]
+        if extra:
+            print(f"    (passthrough: {', '.join(extra)})", file=sys.stderr)
+        print("Restart Claude Code to pick up the updated header.", file=sys.stderr)
         sys.exit(0)
 
     # Handle monitoring token request

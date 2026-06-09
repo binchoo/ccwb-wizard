@@ -123,6 +123,16 @@ def _generate_config_json(config: Config) -> dict:
     if config.attribution:
         profile_config["attribution"] = config.attribution
 
+    # Quota enforcement (credential-process calls the quota check API before issuing creds).
+    # Only wired when the quota stack has been deployed and its endpoint synced into the
+    # profile (config.quota.api_endpoint). Without quota_api_endpoint the provider skips
+    # quota checks entirely (_should_check_quota → False).
+    if config.quota and config.quota.get("api_endpoint"):
+        profile_config["quota_api_endpoint"] = config.quota["api_endpoint"]
+        profile_config["quota_check_interval"] = config.quota.get("check_interval", 30)
+        profile_config["quota_fail_mode"] = config.quota.get("fail_mode", "open")
+        profile_config["quota_check_timeout"] = config.quota.get("check_timeout", 5)
+
     return {"profiles": {config.profile_name: profile_config}}
 
 

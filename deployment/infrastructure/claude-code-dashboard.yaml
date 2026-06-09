@@ -1,23 +1,27 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  CloudWatch dashboard for Claude Code on Bedrock. Replaces the OTEL/PromQL dashboard
-  with widgets that query Custom Metrics published by the bedrock-logging stack
-  metric filters (namespace ClaudeCodeBedrock, dimensions User/Team/ModelId).
+  CloudWatch dashboard for Claude Code on Bedrock. Built on CloudWatch Logs Insights
+  queries over the Bedrock model-invocation log group. Attribution flows through the
+  ccwb magic header X-Amzn-Bedrock-Request-Metadata, surfaced as $.requestMetadata.*.
+  Primary tracking dimensions are user / team / dept (the wizard-mapped attribution
+  keys); passthrough claims (e.g. sub, cognito:username) are also present per the
+  ccwb header contract. Untagged invocations indicate users who skipped install.
 
 Parameters:
   ProfileName:
     Type: String
     Description: ccwb profile name; appears in dashboard title and resource naming.
 
-  MetricNamespace:
+  LogGroupName:
     Type: String
-    Default: ClaudeCodeBedrock
-    Description: CloudWatch metric namespace populated by bedrock-logging metric filters.
+    Description: >
+      CloudWatch Logs group that receives Bedrock model-invocation logs. Must match the
+      effective log group used by the bedrock-logging stack (existing or newly created).
 
   Region:
     Type: String
     Default: us-east-1
-    Description: AWS region the dashboard should query (matches bedrock-logging region).
+    Description: AWS region the Logs Insights widgets query (matches bedrock-logging region).
 
 Resources:
   Dashboard:
@@ -31,109 +35,160 @@ Resources:
               "type": "text",
               "x": 0, "y": 0, "width": 24, "height": 2,
               "properties": {
-                "markdown": "# Claude Code on Bedrock — ${ProfileName}\nUser attribution flows through `ANTHROPIC_CUSTOM_HEADERS`. Untagged invocations indicate users who skipped install.sh."
+                "markdown": "# Claude Code on Bedrock \u2014 ${ProfileName}\nSource log group `${LogGroupName}` (${Region}). Attribution via the ccwb magic header `X-Amzn-Bedrock-Request-Metadata` \u2192 `$.requestMetadata.*`. Primary dimensions: **user / team / dept** (wizard-mapped). Passthrough claims (sub, cognito:username, \u2026) also present. Non-ASCII values are `b64:`-encoded. **Cost = on-demand list price \u00d7 tokens** (per 1M \u2014 Opus $15 in / $75 out \u00b7 Sonnet $3 / $15 \u00b7 Haiku $1 / $5)."
               }
             },
 
             {
-              "type": "metric",
-              "x": 0, "y": 2, "width": 6, "height": 4,
+              "type": "log",
+              "x": 0, "y": 2, "width": 5, "height": 5,
               "properties": {
-                "title": "Input tokens (24h)",
+                "title": "Invocations",
+                "region": "${Region}",
                 "view": "singleValue",
-                "metrics": [[ "${MetricNamespace}", "InputTokensByUser", { "stat": "Sum", "label": "Input" } ]],
-                "region": "${AWS::Region}",
-                "period": 86400
+                "query": "SOURCE '${LogGroupName}'\n| stats count(*) as `Invocations`"
               }
             },
             {
-              "type": "metric",
-              "x": 6, "y": 2, "width": 6, "height": 4,
+              "type": "log",
+              "x": 5, "y": 2, "width": 5, "height": 5,
               "properties": {
-                "title": "Output tokens (24h)",
+                "title": "Total Tokens",
+                "region": "${Region}",
                 "view": "singleValue",
-                "metrics": [[ "${MetricNamespace}", "OutputTokensByUser", { "stat": "Sum", "label": "Output" } ]],
-                "region": "${AWS::Region}",
-                "period": 86400
+                "query": "SOURCE '${LogGroupName}'\n| stats sum(input.inputTokenCount + output.outputTokenCount) as `Tokens`"
               }
             },
             {
-              "type": "metric",
-              "x": 12, "y": 2, "width": 6, "height": 4,
+              "type": "log",
+              "x": 10, "y": 2, "width": 5, "height": 5,
               "properties": {
-                "title": "Invocations (24h)",
+                "title": "Estimated Cost (USD)",
+                "region": "${Region}",
                 "view": "singleValue",
-                "metrics": [[ "${MetricNamespace}", "InvocationCount", { "stat": "Sum" } ]],
-                "region": "${AWS::Region}",
-                "period": 86400
+                "query": "SOURCE '${LogGroupName}'\n| fields if(modelId like /opus/, input.inputTokenCount * 0.000015 + output.outputTokenCount * 0.000075, if(modelId like /sonnet/, input.inputTokenCount * 0.000003 + output.outputTokenCount * 0.000015, if(modelId like /haiku/, input.inputTokenCount * 0.000001 + output.outputTokenCount * 0.000005, 0))) as cost\n| stats sum(cost) as `USD`"
               }
             },
             {
-              "type": "metric",
-              "x": 18, "y": 2, "width": 6, "height": 4,
+              "type": "log",
+              "x": 15, "y": 2, "width": 5, "height": 5,
               "properties": {
-                "title": "Untagged invocations (24h)",
+                "title": "Active Users",
+                "region": "${Region}",
                 "view": "singleValue",
-                "metrics": [[ "${MetricNamespace}", "UntaggedInvocations", { "stat": "Sum", "label": "No requestMetadata" } ]],
-                "region": "${AWS::Region}",
-                "period": 86400
+                "query": "SOURCE '${LogGroupName}'\n| filter ispresent(requestMetadata.user)\n| stats count_distinct(requestMetadata.user) as `Users`"
+              }
+            },
+            {
+              "type": "log",
+              "x": 20, "y": 2, "width": 4, "height": 5,
+              "properties": {
+                "title": "Untagged",
+                "region": "${Region}",
+                "view": "singleValue",
+                "query": "SOURCE '${LogGroupName}'\n| filter not ispresent(requestMetadata.user)\n| stats count(*) as `No metadata`"
               }
             },
 
             {
-              "type": "metric",
-              "x": 0, "y": 6, "width": 12, "height": 6,
+              "type": "log",
+              "x": 0, "y": 7, "width": 12, "height": 7,
               "properties": {
-                "title": "Top users by token usage (input + output)",
+                "title": "Token consumption trend (by user)",
+                "region": "${Region}",
                 "view": "timeSeries",
-                "stacked": false,
-                "metrics": [
-                  [ { "expression": "SEARCH('Namespace=\"${MetricNamespace}\" MetricName=\"InputTokensByUser\"', 'Sum', 300)", "label": "Input by user", "id": "in_search" } ],
-                  [ { "expression": "SEARCH('Namespace=\"${MetricNamespace}\" MetricName=\"OutputTokensByUser\"', 'Sum', 300)", "label": "Output by user", "id": "out_search" } ]
-                ],
-                "region": "${AWS::Region}",
-                "period": 300
+                "stacked": true,
+                "query": "SOURCE '${LogGroupName}'\n| fields coalesce(requestMetadata.user, 'untagged') as user\n| stats sum(input.inputTokenCount + output.outputTokenCount) as tokens by user, bin(5m)"
               }
             },
             {
-              "type": "metric",
-              "x": 12, "y": 6, "width": 12, "height": 6,
+              "type": "log",
+              "x": 12, "y": 7, "width": 12, "height": 7,
+              "properties": {
+                "title": "Token consumption trend (by team)",
+                "region": "${Region}",
+                "view": "timeSeries",
+                "stacked": true,
+                "query": "SOURCE '${LogGroupName}'\n| fields coalesce(requestMetadata.team, 'untagged') as team\n| stats sum(input.inputTokenCount + output.outputTokenCount) as tokens by team, bin(5m)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 14, "width": 8, "height": 7,
+              "properties": {
+                "title": "Tokens by user",
+                "region": "${Region}",
+                "view": "bar",
+                "stacked": true,
+                "query": "SOURCE '${LogGroupName}'\n| fields coalesce(requestMetadata.user, 'untagged') as user\n| stats sum(input.inputTokenCount) as `input`, sum(output.outputTokenCount) as `output` by user\n| sort `input` desc\n| limit 25"
+              }
+            },
+            {
+              "type": "log",
+              "x": 8, "y": 14, "width": 8, "height": 7,
               "properties": {
                 "title": "Tokens by team",
-                "view": "timeSeries",
+                "region": "${Region}",
+                "view": "bar",
                 "stacked": true,
-                "metrics": [
-                  [ { "expression": "SEARCH('Namespace=\"${MetricNamespace}\" MetricName=\"InputTokensByUser\" Team', 'Sum', 300)", "label": "Input by team" } ]
-                ],
-                "region": "${AWS::Region}",
-                "period": 300
+                "query": "SOURCE '${LogGroupName}'\n| fields coalesce(requestMetadata.team, 'untagged') as team\n| stats sum(input.inputTokenCount) as `input`, sum(output.outputTokenCount) as `output` by team"
+              }
+            },
+            {
+              "type": "log",
+              "x": 16, "y": 14, "width": 8, "height": 7,
+              "properties": {
+                "title": "Tokens by dept",
+                "region": "${Region}",
+                "view": "bar",
+                "stacked": true,
+                "query": "SOURCE '${LogGroupName}'\n| fields coalesce(requestMetadata.dept, 'unmapped') as dept\n| stats sum(input.inputTokenCount) as `input`, sum(output.outputTokenCount) as `output` by dept"
               }
             },
 
             {
-              "type": "metric",
-              "x": 0, "y": 12, "width": 12, "height": 6,
+              "type": "log",
+              "x": 0, "y": 21, "width": 12, "height": 7,
               "properties": {
                 "title": "Tokens by model",
-                "view": "timeSeries",
+                "region": "${Region}",
+                "view": "bar",
                 "stacked": true,
-                "metrics": [
-                  [ { "expression": "SEARCH('Namespace=\"${MetricNamespace}\" MetricName=\"InputTokensByUser\" ModelId', 'Sum', 300)", "label": "Input by model" } ]
-                ],
-                "region": "${AWS::Region}",
-                "period": 300
+                "query": "SOURCE '${LogGroupName}'\n| stats sum(input.inputTokenCount) as `input`, sum(output.outputTokenCount) as `output` by modelId"
               }
             },
             {
-              "type": "metric",
-              "x": 12, "y": 12, "width": 12, "height": 6,
+              "type": "log",
+              "x": 12, "y": 21, "width": 12, "height": 7,
               "properties": {
-                "title": "Invocation rate (per minute)",
+                "title": "Estimated cost trend (by model, USD)",
+                "region": "${Region}",
                 "view": "timeSeries",
                 "stacked": false,
-                "metrics": [[ "${MetricNamespace}", "InvocationCount", { "stat": "Sum", "period": 60, "label": "Invocations / min" } ]],
-                "region": "${AWS::Region}",
-                "period": 60
+                "query": "SOURCE '${LogGroupName}'\n| stats sum(if(modelId like /opus/, input.inputTokenCount * 0.000015 + output.outputTokenCount * 0.000075, 0)) as `Opus`, sum(if(modelId like /sonnet/, input.inputTokenCount * 0.000003 + output.outputTokenCount * 0.000015, 0)) as `Sonnet`, sum(if(modelId like /haiku/, input.inputTokenCount * 0.000001 + output.outputTokenCount * 0.000005, 0)) as `Haiku` by bin(5m)"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 28, "width": 24, "height": 8,
+              "properties": {
+                "title": "Top users \u2014 tokens & estimated cost (by user / team / dept)",
+                "region": "${Region}",
+                "view": "table",
+                "query": "SOURCE '${LogGroupName}'\n| fields coalesce(requestMetadata.user, 'untagged') as user, coalesce(requestMetadata.team, '-') as team, coalesce(requestMetadata.dept, '-') as dept\n| fields if(modelId like /opus/, input.inputTokenCount * 0.000015 + output.outputTokenCount * 0.000075, if(modelId like /sonnet/, input.inputTokenCount * 0.000003 + output.outputTokenCount * 0.000015, if(modelId like /haiku/, input.inputTokenCount * 0.000001 + output.outputTokenCount * 0.000005, 0))) as cost\n| stats count(*) as invocations, sum(input.inputTokenCount) as `inputTokens`, sum(output.outputTokenCount) as `outputTokens`, sum(cost) as `costUSD` by user, team, dept\n| sort `inputTokens` desc\n| limit 50"
+              }
+            },
+
+            {
+              "type": "log",
+              "x": 0, "y": 36, "width": 24, "height": 8,
+              "properties": {
+                "title": "Recent invocations (last 50)",
+                "region": "${Region}",
+                "view": "table",
+                "query": "SOURCE '${LogGroupName}'\n| fields coalesce(requestMetadata.user, 'untagged') as user, coalesce(requestMetadata.team, '-') as team, coalesce(requestMetadata.dept, '-') as dept\n| display @timestamp, user, team, dept, modelId, input.inputTokenCount as inTok, output.outputTokenCount as outTok, operation\n| sort @timestamp desc\n| limit 50"
               }
             }
           ]
@@ -147,5 +202,5 @@ Outputs:
       Name: !Sub ${AWS::StackName}-DashboardName
 
   DashboardURL:
-    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${ProfileName}-claude-code-bedrock
+    Value: !Sub https://${Region}.console.aws.amazon.com/cloudwatch/home?region=${Region}#dashboards:name=${ProfileName}-claude-code-bedrock
     Description: Console URL to open the dashboard.

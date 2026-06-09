@@ -254,19 +254,28 @@ async def deploy_profile(name: str):
             yield _sse({"type": "error", "message": "AWS credentials not configured"})
             return
 
-        # Pre-check: should we skip bedrock-logging if already configured?
-        skip_logging = False
+        # Pre-check: if Bedrock logging is already configured, reuse its log group
+        # instead of skipping the whole stack. The logging stack still deploys —
+        # it creates the metric filters (for the dashboard) on the EXISTING log
+        # group, and skips re-configuring the logging destination.
+        existing_log_group = ""
         if config.bedrock_logging.get("skip_if_exists"):
             try:
                 bedrock = boto3.client("bedrock", region_name=config.aws_region)
                 resp = bedrock.get_model_invocation_logging_configuration()
-                if resp.get("loggingConfig"):
-                    skip_logging = True
+                cw = (resp.get("loggingConfig") or {}).get("cloudWatchConfig") or {}
+                existing_log_group = cw.get("logGroupName", "")
             except Exception:
-                pass  # If check fails, proceed with deploy attempt
+                pass  # If check fails, proceed with normal deploy (creates new log group)
 
         # Track S3 artifacts bucket name (from first stack output)
         s3_bucket = ""
+
+        # Track the effective Bedrock log group name. Seeded from the existing-config
+        # check above; refined from the bedrock-logging stack output after it deploys.
+        # Injected into the dashboard stack so its Logs Insights widgets query the
+        # log group that actually receives invocation logs.
+        effective_log_group = existing_log_group
 
         # Pre-fetch S3 bucket from existing stack (if already deployed)
         try:
@@ -279,11 +288,22 @@ async def deploy_profile(name: str):
 
         total = len(artifacts.stacks)
         for i, stack_plan in enumerate(artifacts.stacks, 1):
-            # Skip bedrock-logging if already configured and skip_if_exists is set
-            if skip_logging and "bedrock-logging" in stack_plan.stack_name:
+            # For bedrock-logging: if an existing log group was found, inject it as
+            # ExistingLogGroupName so the stack reuses it (metric filters attach to
+            # the log group that actually receives logs).
+            if "bedrock-logging" in stack_plan.stack_name and existing_log_group:
+                stack_plan.parameters["ExistingLogGroupName"] = existing_log_group
                 yield _sse({"type": "progress", "stack": stack_plan.stack_name,
-                            "step": i, "total": total, "status": "SKIPPED (logging already configured)"})
-                continue
+                            "step": i, "total": total,
+                            "status": f"REUSING log group {existing_log_group}"})
+
+            # For the dashboard: point its Logs Insights widgets at the effective
+            # log group captured from the bedrock-logging stack (or existing config).
+            if "dashboard" in stack_plan.stack_name and effective_log_group:
+                stack_plan.parameters["LogGroupName"] = effective_log_group
+                yield _sse({"type": "progress", "stack": stack_plan.stack_name,
+                            "step": i, "total": total,
+                            "status": f"QUERYING log group {effective_log_group}"})
 
             yield _sse({"type": "progress", "stack": stack_plan.stack_name,
                         "step": i, "total": total, "status": "DEPLOYING"})
@@ -327,6 +347,18 @@ async def deploy_profile(name: str):
                         resp = cfn.describe_stacks(StackName=stack_plan.stack_name)
                         outputs = {o["OutputKey"]: o["OutputValue"] for o in resp["Stacks"][0].get("Outputs", [])}
                         s3_bucket = outputs.get("CfnArtifactsBucket", "")
+                    except Exception:
+                        pass
+
+                # Capture the effective Bedrock log group from the logging stack output
+                # so the dashboard (deployed later) queries the right log group.
+                if "bedrock-logging" in stack_plan.stack_name:
+                    try:
+                        resp = cfn.describe_stacks(StackName=stack_plan.stack_name)
+                        outputs = {o["OutputKey"]: o["OutputValue"] for o in resp["Stacks"][0].get("Outputs", [])}
+                        lg = outputs.get("LogGroupName", "")
+                        if lg:
+                            effective_log_group = lg
                     except Exception:
                         pass
 
@@ -388,13 +420,21 @@ def _sync_outputs_to_profile(cfn, stack_name: str, profile_path: Path) -> list[s
                 profile_data[field] = value
                 synced.append(field)
 
+    # Quota check API endpoint → profile.quota.api_endpoint (consumed by credential-process).
+    # Only applied when the profile has quota enabled (quota dict present); the credential
+    # provider activates quota enforcement only when quota_api_endpoint is set in config.
+    quota_endpoint = outputs.get("QuotaCheckApiEndpoint")
+    if quota_endpoint and isinstance(profile_data.get("quota"), dict):
+        if profile_data["quota"].get("api_endpoint") != quota_endpoint:
+            profile_data["quota"]["api_endpoint"] = quota_endpoint
+            synced.append("quota.api_endpoint")
+
     if synced:
         profile_path.write_text(
             json.dumps(profile_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
 
     return synced
-
 
 @router.get("/profile/{name}/deploy/status")
 async def deploy_status(name: str) -> list[dict]:

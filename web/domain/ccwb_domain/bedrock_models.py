@@ -1017,3 +1017,140 @@ def get_source_region_for_profile(profile, model_key: str = None, profile_key: s
     else:
         # Use infrastructure region for US or default
         return profile.aws_region
+
+
+# ---------------------------------------------------------------------------
+# Region-first helpers (wizard UX simplification — Region + Model ID flow)
+# ---------------------------------------------------------------------------
+
+
+# Tier classification — used to bucket model_ids by their tier (haiku/sonnet/opus).
+# Order in the regex matters because "sonnet" must match before "opus" never overlaps,
+# but sub-key matching is keyword-based (substring) anyway.
+_TIER_KEYWORDS: dict[str, str] = {
+    "haiku": "haiku",
+    "sonnet": "sonnet",
+    "opus": "opus",
+}
+
+
+def _classify_tier(model_key: str) -> str | None:
+    """Classify a model_key (e.g. 'sonnet-4-5') into one of haiku/sonnet/opus."""
+    lower = model_key.lower()
+    for tier, kw in _TIER_KEYWORDS.items():
+        if kw in lower:
+            return tier
+    return None
+
+
+@dataclass(frozen=True)
+class TierModelOption:
+    """A single picker option for a tier in a given source region.
+
+    Represents one cross-region inference profile that can be invoked from
+    ``source_region``. The wizard renders ``display_name`` to the user and
+    persists ``model_id`` (the full CRIS profile id, ready for Bedrock).
+    """
+
+    tier: str          # 'haiku' | 'sonnet' | 'opus'
+    model_id: str      # e.g. 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'
+    display_name: str  # e.g. 'Claude Sonnet 4.5 (US CRIS)'
+    profile_key: str   # 'us' | 'eu' | 'global' | ...
+    base_model_name: str  # e.g. 'Claude Sonnet 4.5'
+
+    def to_dict(self) -> dict:
+        return {
+            "tier": self.tier,
+            "model_id": self.model_id,
+            "display_name": self.display_name,
+            "profile_key": self.profile_key,
+            "base_model_name": self.base_model_name,
+        }
+
+
+def get_tier_options_for_region(source_region: str) -> dict[str, list[TierModelOption]]:
+    """Return tier-bucketed CRIS profile options invocable from ``source_region``.
+
+    Output:
+        {
+          'haiku':  [TierModelOption, ...],
+          'sonnet': [TierModelOption, ...],
+          'opus':   [TierModelOption, ...],
+        }
+
+    Each list contains every ``(model, profile)`` pair whose ``source_regions``
+    includes ``source_region``. The list is sorted by tier first, then by base
+    model name (newest models first via descending model_key version sort), then
+    by profile_key alphabetically.
+    """
+    buckets: dict[str, list[TierModelOption]] = {"haiku": [], "sonnet": [], "opus": []}
+    if not source_region:
+        return buckets
+
+    for model_key, model in CLAUDE_MODELS.items():
+        tier = _classify_tier(model_key)
+        if tier is None:
+            continue
+        for profile_key, profile in model.profiles.items():
+            if source_region in profile.source_regions:
+                # Build display: "Claude Sonnet 4.5 (US CRIS)" — using profile_key
+                # uppercased as a quick label. Global is already meaningful as 'GLOBAL'.
+                profile_label = profile_key.upper()
+                display = f"{model.name} ({profile_label} CRIS)"
+                buckets[tier].append(
+                    TierModelOption(
+                        tier=tier,
+                        model_id=profile.model_id,
+                        display_name=display,
+                        profile_key=profile_key,
+                        base_model_name=model.name,
+                    )
+                )
+
+    # Sort each bucket: newest base model first (by descending model_key), then by
+    # profile_key alphabetically. We approximate "newest" by sorting model_key in
+    # descending order — works for current naming like '4-8', '4-7', '4-5'.
+    def _sort_key(opt: TierModelOption) -> tuple:
+        # Find the matching model_key for stable sort.
+        for mk, m in CLAUDE_MODELS.items():
+            if m.name == opt.base_model_name:
+                return (-_version_score(mk), opt.profile_key)
+        return (0, opt.profile_key)
+
+    for tier in buckets:
+        buckets[tier].sort(key=_sort_key)
+    return buckets
+
+
+def _version_score(model_key: str) -> int:
+    """Crude version score from a model_key like 'sonnet-4-5' or 'opus-4-8'.
+
+    Returns score = major*1000 + minor*10. Falls back to 0 on parse failure.
+    Used only for "newest first" sort within a tier.
+    """
+    parts = model_key.split("-")
+    nums = [p for p in parts if p.isdigit()]
+    if len(nums) >= 2:
+        try:
+            return int(nums[0]) * 1000 + int(nums[1]) * 10
+        except ValueError:
+            return 0
+    if len(nums) == 1:
+        try:
+            return int(nums[0]) * 1000
+        except ValueError:
+            return 0
+    return 0
+
+
+def get_invocable_source_regions() -> list[str]:
+    """Return all AWS regions that appear in any model profile's source_regions.
+
+    Useful for the wizard's source-region dropdown when the user has not yet
+    locked in a region from the Environment page.
+    """
+    seen: set[str] = set()
+    for model in CLAUDE_MODELS.values():
+        for profile in model.profiles.values():
+            seen.update(profile.source_regions)
+    return sorted(seen)

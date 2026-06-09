@@ -100,10 +100,18 @@ def materialize(config: Config) -> DeploymentArtifacts:
     ))
 
     # 3. Dashboard (always)
+    # LogGroupName defaults to the bedrock-logging new-group naming convention.
+    # deploy.py overrides this with the effective (possibly existing) log group
+    # captured from the bedrock-logging stack output before deploying the dashboard.
+    default_log_group = f"/aws/bedrock/modelinvocations/{config.profile_name}"
     stacks.append(StackPlan(
         stack_name=f"{config.stack_base_name}-dashboard",
         template_path=DEPLOYMENT / "claude-code-dashboard.yaml",
-        parameters={"ProfileName": config.profile_name, "Region": config.aws_region},
+        parameters={
+            "ProfileName": config.profile_name,
+            "Region": config.aws_region,
+            "LogGroupName": default_log_group,
+        },
         tags=config.tags,
     ))
 

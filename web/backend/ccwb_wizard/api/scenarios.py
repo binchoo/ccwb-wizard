@@ -6,7 +6,12 @@ from fastapi import APIRouter
 
 from ccwb_domain.providers import PROVIDERS
 from ccwb_domain.providers.base import FormField
-from ccwb_domain.bedrock_models import CLAUDE_MODELS, get_available_profiles_for_model
+from ccwb_domain.bedrock_models import (
+    CLAUDE_MODELS,
+    get_available_profiles_for_model,
+    get_tier_options_for_region,
+    get_invocable_source_regions,
+)
 
 router = APIRouter(tags=["scenarios"])
 
@@ -31,6 +36,28 @@ async def get_providers() -> list[dict]:
 async def get_models() -> dict:
     """Model matrix for cascade selector."""
     return _serialize_models()
+
+
+@router.get("/scenarios/source-regions")
+async def get_source_regions() -> list[str]:
+    """All AWS regions invocable as a Bedrock source region for any Claude model.
+
+    Used by the Bedrock page to populate the source region dropdown when the
+    user wants to override the Environment page region for model invocation.
+    """
+    return get_invocable_source_regions()
+
+
+@router.get("/scenarios/tier-options")
+async def get_tier_options(region: str) -> dict:
+    """Tier-bucketed CRIS profile options invocable from ``region``.
+
+    Returns ``{tier: [{model_id, display_name, profile_key, base_model_name}, ...]}``
+    where tier ∈ {haiku, sonnet, opus}. The frontend renders one dropdown per
+    tier with these options and persists the chosen ``model_id`` directly.
+    """
+    buckets = get_tier_options_for_region(region)
+    return {tier: [opt.to_dict() for opt in opts] for tier, opts in buckets.items()}
 
 
 def _serialize_providers() -> list[dict]:
