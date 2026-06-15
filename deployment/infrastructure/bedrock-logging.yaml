@@ -223,6 +223,14 @@ Resources:
   # CloudWatch metric filters require a CW Logs destination; if logging is
   # configured as S3-only, use Athena queries instead (see Outputs).
   # ---------------------------------------------------------------
+  # Per-axis token metrics. Each filter emits a SINGLE-dimension metric so that
+  # GetMetricData by that dimension returns the value summed across all other
+  # (absent) dimensions — this is what enables true User / Team / Dept aggregation.
+  # (A multi-dimension metric like [User,Team,ModelId] can only be retrieved by the
+  # exact 3-tuple, which silently breaks single-key quota queries.)
+  # A dimension is published only when its value field is present in the log event,
+  # so untagged calls simply do not contribute to any axis.
+
   InputTokensByUserMetricFilter:
     Type: AWS::Logs::MetricFilter
     Condition: EnableCloudWatchLogs
@@ -238,10 +246,6 @@ Resources:
           Dimensions:
             - Key: User
               Value: $.requestMetadata.user
-            - Key: Team
-              Value: $.requestMetadata.team
-            - Key: ModelId
-              Value: $.modelId
 
   OutputTokensByUserMetricFilter:
     Type: AWS::Logs::MetricFilter
@@ -258,10 +262,70 @@ Resources:
           Dimensions:
             - Key: User
               Value: $.requestMetadata.user
+
+  InputTokensByTeamMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: EnableCloudWatchLogs
+    Properties:
+      LogGroupName: !If [UseExistingLogGroup, !Ref ExistingLogGroupName, !Ref InvocationLogsLogGroup]
+      FilterName: !Sub ${ProfileName}-input-tokens-by-team
+      FilterPattern: '{ ($.requestMetadata.team = "*") && ($.input.inputTokenCount = *) }'
+      MetricTransformations:
+        - MetricName: InputTokensByTeam
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: $.input.inputTokenCount
+          Unit: Count
+          Dimensions:
             - Key: Team
               Value: $.requestMetadata.team
-            - Key: ModelId
-              Value: $.modelId
+
+  OutputTokensByTeamMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: EnableCloudWatchLogs
+    Properties:
+      LogGroupName: !If [UseExistingLogGroup, !Ref ExistingLogGroupName, !Ref InvocationLogsLogGroup]
+      FilterName: !Sub ${ProfileName}-output-tokens-by-team
+      FilterPattern: '{ ($.requestMetadata.team = "*") && ($.output.outputTokenCount = *) }'
+      MetricTransformations:
+        - MetricName: OutputTokensByTeam
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: $.output.outputTokenCount
+          Unit: Count
+          Dimensions:
+            - Key: Team
+              Value: $.requestMetadata.team
+
+  InputTokensByDeptMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: EnableCloudWatchLogs
+    Properties:
+      LogGroupName: !If [UseExistingLogGroup, !Ref ExistingLogGroupName, !Ref InvocationLogsLogGroup]
+      FilterName: !Sub ${ProfileName}-input-tokens-by-dept
+      FilterPattern: '{ ($.requestMetadata.dept = "*") && ($.input.inputTokenCount = *) }'
+      MetricTransformations:
+        - MetricName: InputTokensByDept
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: $.input.inputTokenCount
+          Unit: Count
+          Dimensions:
+            - Key: Dept
+              Value: $.requestMetadata.dept
+
+  OutputTokensByDeptMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: EnableCloudWatchLogs
+    Properties:
+      LogGroupName: !If [UseExistingLogGroup, !Ref ExistingLogGroupName, !Ref InvocationLogsLogGroup]
+      FilterName: !Sub ${ProfileName}-output-tokens-by-dept
+      FilterPattern: '{ ($.requestMetadata.dept = "*") && ($.output.outputTokenCount = *) }'
+      MetricTransformations:
+        - MetricName: OutputTokensByDept
+          MetricNamespace: !Ref MetricNamespace
+          MetricValue: $.output.outputTokenCount
+          Unit: Count
+          Dimensions:
+            - Key: Dept
+              Value: $.requestMetadata.dept
 
   InvocationCountMetricFilter:
     Type: AWS::Logs::MetricFilter
@@ -278,10 +342,6 @@ Resources:
           Dimensions:
             - Key: User
               Value: $.requestMetadata.user
-            - Key: Team
-              Value: $.requestMetadata.team
-            - Key: ModelId
-              Value: $.modelId
 
   # Untagged-call ratio: catches invocations with no requestMetadata block
   # (users who skipped install.sh or env clobbered ANTHROPIC_CUSTOM_HEADERS).

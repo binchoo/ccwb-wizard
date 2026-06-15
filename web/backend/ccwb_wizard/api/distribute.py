@@ -52,21 +52,30 @@ def _detect_platform() -> str:
 
 
 @router.post("/profile/{name}/distribute")
-async def distribute_package(name: str, expiry_hours: int = 48) -> dict:
-    """Upload package zip to S3 and return presigned download URL."""
+async def distribute_package(name: str, expiry_hours: int = 48, artifact: str = "current") -> dict:
+    """Upload a package zip to S3 and return a presigned download URL.
+
+    artifact: "current" → the macOS/Linux package (<name>-<platform>.zip);
+              "windows" → the self-contained Windows package (<name>-windows.zip).
+    """
     # Load profile
     path = PROFILES_DIR / f"{name}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Profile '{name}' not found")
 
     config = Config.load(path)
-    platform_name = _detect_platform()
-    zip_path = DIST_BASE / f"{name}-{platform_name}.zip"
+    if artifact == "windows":
+        platform_name = "windows"
+        zip_path = DIST_BASE / f"{name}-windows.zip"
+    else:
+        platform_name = _detect_platform()
+        zip_path = DIST_BASE / f"{name}-{platform_name}.zip"
 
     if not zip_path.exists():
+        hint = "Run the Windows build first." if artifact == "windows" else "Run Package first."
         raise HTTPException(
             status_code=400,
-            detail=f"Package not built yet. Run Package first. Expected: {zip_path}"
+            detail=f"Package not built yet. {hint} Expected: {zip_path}"
         )
 
     # Get distribution bucket

@@ -341,6 +341,21 @@ async def deploy_profile(name: str):
                 if synced:
                     yield _sse({"type": "sync", "stack": stack_plan.stack_name, "synced": synced})
 
+                # Quota stack: seed fine-grained policies + subscribe alert emails.
+                if "-quota" in stack_plan.stack_name:
+                    try:
+                        resp = cfn.describe_stacks(StackName=stack_plan.stack_name)
+                        q_outputs = {o["OutputKey"]: o["OutputValue"]
+                                     for o in resp["Stacks"][0].get("Outputs", [])}
+                        for msg in _post_deploy_quota(config, q_outputs):
+                            yield _sse({"type": "progress", "stack": stack_plan.stack_name,
+                                        "step": i, "total": total, "status": msg})
+                    except Exception as e:
+                        yield _sse({"type": "progress", "stack": stack_plan.stack_name,
+                                    "step": i, "total": total,
+                                    "status": f"quota post-deploy warning: {e}"})
+
+
                 # Capture S3 artifacts bucket for subsequent `cloudformation package` calls
                 if "-s3" in stack_plan.stack_name and not s3_bucket:
                     try:
@@ -435,6 +450,93 @@ def _sync_outputs_to_profile(cfn, stack_name: str, profile_path: Path) -> list[s
         )
 
     return synced
+
+
+def _post_deploy_quota(config: Config, outputs: dict) -> list[str]:
+    """Imperative quota wiring CFN can't express cleanly.
+
+    1. Seed QuotaPolicies (user/team/dept/default rows) from config.quota.policies.
+    2. Subscribe alert emails to the SNS topic (idempotent — skips existing endpoints).
+
+    These persist outside the stack lifecycle (policy rows + confirmed subscriptions
+    survive stack delete); acceptable at this tool's scale. Returns status messages.
+    """
+    msgs: list[str] = []
+    quota = config.quota or {}
+    region = config.aws_region
+
+    # --- 1. Seed fine-grained policies ---
+    policies = quota.get("policies") or []
+    if quota.get("enable_finegrained_quotas"):
+        table_name = outputs.get("PoliciesTableName", "QuotaPolicies")
+        ddb = boto3.resource("dynamodb", region_name=region)
+        table = ddb.Table(table_name)
+
+        rows = list(policies)
+        # Ensure a default policy exists so unconfigured users still get a limit.
+        if not any((p.get("type") or p.get("policy_type")) == "default" for p in rows):
+            rows.append({
+                "type": "default", "id": "default",
+                "monthly_limit": quota.get("monthly_token_limit", 225_000_000),
+                "daily_limit": quota.get("daily_token_limit", 0),
+                "enforcement": quota.get("monthly_enforcement", "block"),
+            })
+
+        seeded = 0
+        for p in rows:
+            ptype = p.get("type") or p.get("policy_type")
+            ident = p.get("id") or p.get("identifier")
+            if not ptype or not ident:
+                continue
+            monthly = int(p.get("monthly_limit", p.get("monthly_token_limit", 0)) or 0)
+            daily = int(p.get("daily_limit", p.get("daily_token_limit", 0)) or 0)
+            item = {
+                "pk": f"POLICY#{ptype}#{ident}", "sk": "CURRENT",
+                "policy_type": ptype, "identifier": ident,
+                "monthly_token_limit": monthly,
+                "warning_threshold_80": int(monthly * 0.8),
+                "warning_threshold_90": int(monthly * 0.9),
+                "enforcement_mode": p.get("enforcement", "alert"),
+                "enabled": p.get("enabled", True),
+            }
+            if daily > 0:
+                item["daily_token_limit"] = daily
+            try:
+                table.put_item(Item=item)
+                seeded += 1
+            except Exception as e:
+                msgs.append(f"policy seed failed ({ptype}:{ident}): {e}")
+        if seeded:
+            msgs.append(f"seeded {seeded} quota policies")
+
+    # --- 2. Subscribe alert emails to SNS ---
+    emails = [e.strip() for e in (quota.get("alert_emails") or []) if e and e.strip()]
+    topic_arn = outputs.get("QuotaAlertTopicArn")
+    if emails and topic_arn:
+        sns = boto3.client("sns", region_name=region)
+        existing = set()
+        try:
+            paginator = sns.get_paginator("list_subscriptions_by_topic")
+            for page in paginator.paginate(TopicArn=topic_arn):
+                for sub in page.get("Subscriptions", []):
+                    if sub.get("Protocol") == "email":
+                        existing.add(sub.get("Endpoint"))
+        except Exception:
+            pass
+        subscribed = 0
+        for email in emails:
+            if email in existing:
+                continue
+            try:
+                sns.subscribe(TopicArn=topic_arn, Protocol="email", Endpoint=email)
+                subscribed += 1
+            except Exception as e:
+                msgs.append(f"SNS subscribe failed ({email}): {e}")
+        if subscribed:
+            msgs.append(f"subscribed {subscribed} email(s) — confirm via the link AWS sends")
+
+    return msgs
+
 
 @router.get("/profile/{name}/deploy/status")
 async def deploy_status(name: str) -> list[dict]:

@@ -7,6 +7,7 @@ body, and keyring write operations.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -131,6 +132,7 @@ def materialize(config: Config) -> DeploymentArtifacts:
                 "EnableFinegrainedQuotas": str(config.quota.get("enable_finegrained_quotas", False)).lower(),
                 "OidcIssuerUrl": oidc_issuer,
                 "OidcClientId": oidc_client_id,
+                "AttributionJson": json.dumps(config.attribution or {}, ensure_ascii=True),
             },
             tags=config.tags,
         ))
@@ -149,7 +151,7 @@ def materialize(config: Config) -> DeploymentArtifacts:
         stacks.append(StackPlan(
             stack_name=f"{config.stack_base_name}-codebuild",
             template_path=DEPLOYMENT / "codebuild-windows.yaml",
-            parameters={"StackBaseName": config.stack_base_name},
+            parameters={"ProjectNamePrefix": config.stack_base_name},
             tags=config.tags,
         ))
 

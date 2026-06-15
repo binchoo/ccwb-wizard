@@ -74,9 +74,20 @@ export const getPackageStatus = (name: string) =>
     `/profile/${name}/package/status`
   );
 
+// --- Windows build (CodeBuild) ---
+export const startWindowsBuild = (name: string) =>
+  request<{ status: string; build_id: string; project: string; bucket: string }>(
+    `/profile/${name}/package/windows`, { method: "POST" }
+  );
+
+export const getWindowsBuildStatus = (name: string) =>
+  request<{ status: string; build_id?: string; binary?: string; merged?: boolean; zip_path?: string; message?: string }>(
+    `/profile/${name}/builds`
+  );
+
 
 // --- Distribute ---
-export const distributePackage = (name: string, expiryHours: number = 48) =>
+export const distributePackage = (name: string, expiryHours: number = 48, artifact: "current" | "windows" = "current") =>
   request<{ status: string; presigned_url: string; expiry_hours: number; platform: string; bucket: string; s3_key: string; zip_size_mb: number }>(
-    `/profile/${name}/distribute?expiry_hours=${expiryHours}`, { method: "POST" }
+    `/profile/${name}/distribute?expiry_hours=${expiryHours}&artifact=${artifact}`, { method: "POST" }
   );
