@@ -8,6 +8,7 @@ import Header from "@cloudscape-design/components/header";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Alert from "@cloudscape-design/components/alert";
 import Select from "@cloudscape-design/components/select";
+import Button from "@cloudscape-design/components/button";
 import { useWizardStore } from "../store";
 
 export default function LoggingQuotaPage() {
@@ -27,6 +28,18 @@ export default function LoggingQuotaPage() {
   const cwLogs = dest === "cloudwatch" || dest === "both";
   const s3 = dest === "s3" || dest === "both";
   const quotaEnabled = draft.quota !== null;
+
+  // Quota helpers (quota is a free-form dict in the draft).
+  const q = (draft.quota || {}) as Record<string, any>;
+  const finegrained = !!q.enable_finegrained_quotas;
+  const policies: any[] = Array.isArray(q.policies) ? q.policies : [];
+  const emails: string[] = Array.isArray(q.alert_emails) ? q.alert_emails : [];
+  const setQuota = (patch: Record<string, unknown>) => updateDraft({ quota: { ...(draft.quota || {}), ...patch } });
+  const setPolicy = (idx: number, patch: Record<string, unknown>) =>
+    setQuota({ policies: policies.map((p, i) => (i === idx ? { ...p, ...patch } : p)) });
+  const addPolicy = () =>
+    setQuota({ policies: [...policies, { type: "user", id: "", monthly_limit: 225000000, daily_limit: 0, enforcement: "block" }] });
+  const removePolicy = (idx: number) => setQuota({ policies: policies.filter((_, i) => i !== idx) });
 
   const setDestination = (cw: boolean, s3on: boolean) => {
     let d = "";
@@ -88,22 +101,68 @@ export default function LoggingQuotaPage() {
         </SpaceBetween>
       </Container>
 
-      <Container header={<Header variant="h2" description="여기서 설정하는 값은 전체 사용자에게 적용되는 기본(default) 정책입니다. 개별 사용자/그룹별 세분화 정책은 Fine-grained Quotas를 활성화한 뒤 DynamoDB QuotaPolicies 테이블에서 관리합니다.">Quota Monitoring</Header>}>
+      <Container header={<Header variant="h2" description="기본(default) 정책은 전체 사용자에게 적용됩니다. Fine-grained Quotas를 켜면 User/Team/Dept별 개별 상한을 여기서 직접 할당하고, Deploy 시 QuotaPolicies 테이블에 주입합니다.">Quota Monitoring</Header>}>
         <SpaceBetween size="m">
-          <Toggle checked={quotaEnabled} onChange={({ detail }) => updateDraft({ quota: detail.checked ? { monthly_token_limit: 225000000, daily_token_limit: 0, burst_buffer_percent: 10, daily_enforcement: "alert", monthly_enforcement: "block" } : null })} data-testid="quota-toggle">
+          <Toggle checked={quotaEnabled} onChange={({ detail }) => updateDraft({ quota: detail.checked ? { monthly_token_limit: 225000000, daily_token_limit: 0, burst_buffer_percent: 10, daily_enforcement: "alert", monthly_enforcement: "block", enable_finegrained_quotas: false, alert_emails: [], policies: [] } : null })} data-testid="quota-toggle">
             Quota 활성화
           </Toggle>
           {quotaEnabled && draft.quota && (
             <SpaceBetween size="s">
-              <FormField label="Monthly Token Limit">
-                <Input type="number" value={String(draft.quota.monthly_token_limit || 225000000)} onChange={({ detail }) => updateDraft({ quota: { ...draft.quota!, monthly_token_limit: Number(detail.value) } })} data-testid="monthly-limit-input" />
+              <FormField label="Monthly Token Limit (기본 정책)">
+                <Input type="number" value={String(draft.quota.monthly_token_limit || 225000000)} onChange={({ detail }) => setQuota({ monthly_token_limit: Number(detail.value) })} data-testid="monthly-limit-input" />
+              </FormField>
+              <FormField label="Daily Token Limit (기본 정책, 0=비활성)">
+                <Input type="number" value={String((draft.quota.daily_token_limit as number) ?? 0)} onChange={({ detail }) => setQuota({ daily_token_limit: Number(detail.value) })} data-testid="daily-limit-input" />
               </FormField>
               <FormField label="Daily Enforcement">
-                <Select selectedOption={{ value: (draft.quota.daily_enforcement as string) || "alert" }} onChange={({ detail }) => updateDraft({ quota: { ...draft.quota!, daily_enforcement: detail.selectedOption.value } })} options={[{ value: "alert", label: "Alert" }, { value: "block", label: "Block" }]} data-testid="daily-enforcement-select" />
+                <Select selectedOption={{ value: (draft.quota.daily_enforcement as string) || "alert" }} onChange={({ detail }) => setQuota({ daily_enforcement: detail.selectedOption.value })} options={[{ value: "alert", label: "Alert" }, { value: "block", label: "Block" }]} data-testid="daily-enforcement-select" />
               </FormField>
               <FormField label="Monthly Enforcement">
-                <Select selectedOption={{ value: (draft.quota.monthly_enforcement as string) || "block" }} onChange={({ detail }) => updateDraft({ quota: { ...draft.quota!, monthly_enforcement: detail.selectedOption.value } })} options={[{ value: "alert", label: "Alert" }, { value: "block", label: "Block" }]} data-testid="monthly-enforcement-select" />
+                <Select selectedOption={{ value: (draft.quota.monthly_enforcement as string) || "block" }} onChange={({ detail }) => setQuota({ monthly_enforcement: detail.selectedOption.value })} options={[{ value: "alert", label: "Alert" }, { value: "block", label: "Block" }]} data-testid="monthly-enforcement-select" />
               </FormField>
+
+              <FormField label="알림 Email (SNS 구독, 쉼표로 구분)" description="Deploy 시 SNS 토픽에 구독되며, 각 주소로 확인 메일이 발송됩니다.">
+                <Input
+                  value={emails.join(", ")}
+                  onChange={({ detail }) => setQuota({ alert_emails: detail.value.split(",").map((e) => e.trim()).filter(Boolean) })}
+                  placeholder="ops@example.com, admin@example.com"
+                  data-testid="alert-emails-input"
+                />
+              </FormField>
+
+              <Toggle checked={finegrained} onChange={({ detail }) => setQuota({ enable_finegrained_quotas: detail.checked })} data-testid="finegrained-toggle">
+                Fine-grained Quotas (User/Team/Dept별 개별 상한)
+              </Toggle>
+
+              {finegrained && (
+                <SpaceBetween size="xs">
+                  <Alert type="info">
+                    Team/Dept 상한은 <strong>합산 집계</strong> 기준입니다 — 해당 팀/부서 구성원의 토큰 합계가 상한을 넘으면 enforcement가 block일 때 전원 차단됩니다.
+                    Team/Dept identifier는 Attribution 매핑으로 도출된 값과 일치해야 합니다.
+                  </Alert>
+                  {policies.map((p, idx) => (
+                    <SpaceBetween key={idx} size="xs" direction="horizontal">
+                      <Select
+                        selectedOption={{ value: p.type || "user", label: p.type || "user" }}
+                        onChange={({ detail }) => setPolicy(idx, { type: detail.selectedOption.value })}
+                        options={[{ value: "user", label: "user" }, { value: "team", label: "team" }, { value: "dept", label: "dept" }, { value: "default", label: "default" }]}
+                        data-testid={`policy-type-${idx}`}
+                      />
+                      <Input value={String(p.id ?? "")} placeholder="identifier (예: alice@x.com / blue)" onChange={({ detail }) => setPolicy(idx, { id: detail.value })} data-testid={`policy-id-${idx}`} />
+                      <Input type="number" value={String(p.monthly_limit ?? 0)} placeholder="monthly" onChange={({ detail }) => setPolicy(idx, { monthly_limit: Number(detail.value) })} data-testid={`policy-monthly-${idx}`} />
+                      <Input type="number" value={String(p.daily_limit ?? 0)} placeholder="daily(0=off)" onChange={({ detail }) => setPolicy(idx, { daily_limit: Number(detail.value) })} data-testid={`policy-daily-${idx}`} />
+                      <Select
+                        selectedOption={{ value: p.enforcement || "block", label: p.enforcement || "block" }}
+                        onChange={({ detail }) => setPolicy(idx, { enforcement: detail.selectedOption.value })}
+                        options={[{ value: "alert", label: "alert" }, { value: "block", label: "block" }]}
+                        data-testid={`policy-enforcement-${idx}`}
+                      />
+                      <Button onClick={() => removePolicy(idx)} data-testid={`policy-remove-${idx}`}>삭제</Button>
+                    </SpaceBetween>
+                  ))}
+                  <Button onClick={addPolicy} iconName="add-plus" data-testid="policy-add">정책 추가</Button>
+                </SpaceBetween>
+              )}
             </SpaceBetween>
           )}
         </SpaceBetween>

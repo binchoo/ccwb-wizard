@@ -6,7 +6,7 @@ Parameters:
     Type: Number
     Default: 10000000
     Description: Default monthly token limit per user (10M tokens) - used when no policy is defined
-    MinValue: 1000000
+    MinValue: 0
     MaxValue: 1000000000
 
   WarningThreshold80:
@@ -58,6 +58,13 @@ Parameters:
   OidcClientId:
     Type: String
     Description: OIDC client ID (audience) for JWT validation
+
+  AttributionJson:
+    Type: String
+    Default: '{}'
+    Description: >
+      JSON attribution config (mapping + passthrough) so the quota check derives
+      user/team/dept scope ids identically to the credential helper's magic header.
 
 Resources:
   # DynamoDB table for quota policies (user, group, default levels)
@@ -273,6 +280,8 @@ Resources:
           DAILY_TOKEN_LIMIT: !Ref DailyTokenLimit
           DAILY_ENFORCEMENT_MODE: !Ref DailyEnforcementMode
           MONTHLY_ENFORCEMENT_MODE: !Ref MonthlyEnforcementMode
+          ENABLE_FINEGRAINED_QUOTAS: !Ref EnableFinegrainedQuotas
+          ATTRIBUTION_JSON: !Ref AttributionJson
       Code: ./lambda-functions/quota_check/
 
   # HTTP API Gateway (v2 - cheaper and faster than REST API)
