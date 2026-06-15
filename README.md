@@ -126,13 +126,23 @@ they receive a pre-built package and log in with corporate credentials.
 | `*-auth` | IAM OIDC provider (or Cognito Identity Pool) + Bedrock-scoped federated role |
 | `*-bedrock-logging` | Enables Bedrock model-invocation logging + metric filters on the invocation log group (reuses an existing log group when one is already configured) |
 | `*-dashboard` | CloudWatch Logs Insights dashboard keyed on `user` / `team` / `dept`, with per-model cost estimation |
-| `*-quota` (optional) | Per-user monthly/daily token limits, SNS alerts, optional block-on-exceed |
+| `*-quota` (optional) | User / team / dept **aggregate** token limits (monthly/daily), SNS email alerts, optional block-on-exceed |
 | `*-distribution` (optional) | Presigned-URL or authenticated landing-page distribution |
 | `*-codebuild` (optional) | Windows `.exe` build via CodeBuild |
 
-The package contains the `credential-process` binary, `config.json`, `install.sh`, and a
-`settings.json` template. End users run `install.sh`, then authenticate once via
-`credential-process --profile <name>`.
+End users receive an **OS-specific, self-contained** package:
+
+- **macOS / Linux** — `<profile>-<platform>.zip`: the `credential-process` binary, `config.json`,
+  `settings.json`, and `install.sh`. Built locally on the operator machine.
+- **Windows** — `<profile>-windows.zip`: `credential-process-windows.exe`, `config.json`,
+  `settings.json`, and `install.bat`. Built in the cloud via the `*-codebuild` stack (no
+  Windows machine needed), then assembled by the wizard.
+
+Each package is independent — the end user runs `install.sh` (macOS/Linux) or `install.bat`
+(Windows), then authenticates once via `credential-process --profile <name>`. The installers
+place the binary, write the `~/.aws/config` profile, and install the `~/.claude/settings.json`
+template; they do not install Claude Code itself (assumed pre-installed) and emit an advisory
+if `aws`/`claude` are missing from `PATH`.
 
 ---
 
@@ -149,6 +159,29 @@ CloudWatch Logs Insights queries:
 
 Untagged invocations (no `requestMetadata`) flag users who skipped `install.sh` or whose
 environment overrode `ANTHROPIC_CUSTOM_HEADERS`.
+
+---
+
+## Quotas (User / Team / Dept aggregate)
+
+Quotas are optional and aggregate at three scopes. The `*-bedrock-logging` metric filters
+emit single-dimension token metrics per axis (`InputTokensBy{User,Team,Dept}` /
+`OutputTokensBy{...}` in the `ClaudeCodeBedrock` namespace). Every 15 minutes an EventBridge
+rule runs the quota-monitor Lambda, which sums each scope into DynamoDB rollups
+(`USER#` / `TEAM#` / `DEPT#`).
+
+- **Default policy** — a single monthly/daily limit applied to every user, set in the wizard.
+- **Fine-grained policies** — enable the toggle in the wizard and assign per-`user`/`team`/`dept`
+  limits in the policy table. On deploy these are seeded into the `QuotaPolicies` table.
+- **Enforcement** — `alert` (SNS notification only) or `block` (deny credential issuance). The
+  credential helper calls the quota-check API before issuing credentials; access is denied if
+  **any** scope (user, team, or dept) is over a `block`-mode limit. Team/dept enforcement is a
+  true aggregate — when a team's combined usage exceeds its limit, every member is blocked.
+- **Alerts** — add operator emails in the wizard; they are subscribed to the quota SNS topic at
+  deploy time (each address must confirm the AWS subscription email).
+
+Team/dept identifiers come from the attribution mapping, so a policy's identifier must match
+the value carried in `$.requestMetadata.{team,dept}` (non-ASCII values are `b64:`-encoded).
 
 ---
 
