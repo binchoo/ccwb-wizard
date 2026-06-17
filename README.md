@@ -213,6 +213,7 @@ there for the full index. Key entry points:
 | Doc | What it covers |
 |-----|----------------|
 | [QUICK_START.md](QUICK_START.md) | Full CLI deployment walkthrough |
+| [QUICK_START.ko.md](QUICK_START.ko.md) | 한국어 빠른 시작 (IT 어드민·엔드 유저 액션 순서) |
 | [web/README.md](web/README.md) | Web wizard architecture, dev setup, step-by-step flow |
 | [assets/docs/README.md](assets/docs/README.md) | Full user & operator guide index (IdP setup, deployment, monitoring, quotas, cost) |
 | [assets/docs/QUOTA_MONITORING.md](assets/docs/QUOTA_MONITORING.md) | Quota policies, alerts, and `ccwb quota` CLI |

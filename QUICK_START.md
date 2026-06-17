@@ -1,5 +1,7 @@
 # Quick Start Guide
 
+> 🇰🇷 한국어 버전: [QUICK_START.ko.md](QUICK_START.ko.md) (IT 어드민·엔드 유저 액션 순서 중심 요약)
+
 Complete deployment walkthrough for IT administrators deploying **Claude Code with Amazon Bedrock (ccwb)** using the **web wizard** (`uv run ccwb`).
 
 - **Time required:** 2–3 hours for initial deployment
