@@ -8,6 +8,7 @@ export interface ConfigDraft {
   profile_name: string;
   schema_version: string;
   aws_region: string;
+  aws_profile: string;
   stack_base_name: string;
   provider: Record<string, unknown>;
   attribution: {
@@ -43,6 +44,7 @@ const EMPTY_DRAFT: ConfigDraft = {
   profile_name: "",
   schema_version: "3.0",
   aws_region: "",
+  aws_profile: "",
   stack_base_name: "",
   provider: {},
   attribution: { mapping: { user: "", team: "", dept: "" }, passthrough: [] },

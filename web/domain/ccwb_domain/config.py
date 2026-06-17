@@ -26,6 +26,12 @@ class Config:
     aws_region: str = ""
     stack_base_name: str = ""
 
+    # Page 1 — AWS deployment credentials (named profile from ~/.aws/config).
+    # Empty string = default credential chain (env vars / default profile).
+    # deploy/package/distribute build their boto3 session from this so the
+    # wizard targets the SAME account the operator selected on the Environment page.
+    aws_profile: str = ""
+
     # Page 2 — Identity Provider (polymorphic dict, dispatched by "type" key)
     provider: dict[str, Any] = field(default_factory=dict)
 
@@ -83,9 +89,19 @@ class Config:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
     def save(self, path: Path) -> None:
-        """Save Config to a JSON file. Creates parent dirs if needed."""
+        """Save Config to a JSON file. Creates parent dirs if needed.
+
+        Raw secrets are never written to disk. A confidential ``client_secret``
+        (Google / Azure desktop clients) lives only in the OS keyring — written
+        separately via the wizard's keyring endpoint and read by credential-process
+        from ``{profile}-client-secret``. The profile JSON must not carry it.
+        """
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {k: getattr(self, k) for k in self.__dataclass_fields__}
+        provider = data.get("provider")
+        if isinstance(provider, dict) and "client_secret" in provider:
+            # Strip from a copy so the in-memory Config is left untouched.
+            data["provider"] = {k: v for k, v in provider.items() if k != "client_secret"}
         path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     def to_dict(self) -> dict[str, Any]:

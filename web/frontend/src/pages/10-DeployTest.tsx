@@ -9,7 +9,7 @@ import ExpandableSection from "@cloudscape-design/components/expandable-section"
 import ProgressBar from "@cloudscape-design/components/progress-bar";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
 import { useWizardStore } from "../store";
-import { deployProfile, buildPackage, distributePackage, getDeployStatus } from "../api";
+import { deployProfile, buildPackage, distributePackage, getDeployStatus, startWindowsBuild, getWindowsBuildStatus } from "../api";
 
 interface StackEvent {
   type: string;
@@ -53,10 +53,16 @@ export default function DeployTestPage() {
   const [packageResult, setPackageResult] = useState<Record<string, unknown> | null>(null);
   const [packageError, setPackageError] = useState("");
 
-  // Distribute state
-  const [distributing, setDistributing] = useState(false);
-  const [distributeResult, setDistributeResult] = useState<Record<string, unknown> | null>(null);
+  // Distribute state (per artifact: current OS package vs windows package)
+  const [distributing, setDistributing] = useState<string>("");
+  const [distributeResult, setDistributeResult] = useState<Record<string, Record<string, unknown>>>({});
   const [distributeError, setDistributeError] = useState("");
+
+  // Windows build (CodeBuild) state
+  const [winBuilding, setWinBuilding] = useState(false);
+  const [winStatus, setWinStatus] = useState<string>("");
+  const [winResult, setWinResult] = useState<Record<string, unknown> | null>(null);
+  const [winError, setWinError] = useState("");
 
   const handleDeploy = async () => {
     setDeploying(true);
@@ -108,16 +114,42 @@ export default function DeployTestPage() {
     }
   };
 
-  const handleDistribute = async () => {
-    setDistributing(true);
+  const handleDistribute = async (artifact: "current" | "windows") => {
+    setDistributing(artifact);
     setDistributeError("");
     try {
-      const result = await distributePackage(draft.profile_name);
-      setDistributeResult(result as unknown as Record<string, unknown>);
+      const result = await distributePackage(draft.profile_name, 48, artifact);
+      setDistributeResult((prev) => ({ ...prev, [artifact]: result as unknown as Record<string, unknown> }));
     } catch (e) {
       setDistributeError((e as Error).message);
     } finally {
-      setDistributing(false);
+      setDistributing("");
+    }
+  };
+
+  // Start the Windows CodeBuild and poll until it finishes (or fails).
+  const handleWindowsBuild = async () => {
+    setWinBuilding(true);
+    setWinError("");
+    setWinResult(null);
+    setWinStatus("STARTING");
+    try {
+      await startWindowsBuild(draft.profile_name);
+      // Poll every 15s. CodeBuild Windows builds take ~15-20 min.
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        await new Promise((r) => setTimeout(r, 15000));
+        const s = await getWindowsBuildStatus(draft.profile_name);
+        setWinStatus(s.status);
+        if (["SUCCEEDED", "FAILED", "FAULT", "STOPPED", "TIMED_OUT"].includes(s.status)) {
+          setWinResult(s as unknown as Record<string, unknown>);
+          break;
+        }
+      }
+    } catch (e) {
+      setWinError((e as Error).message);
+    } finally {
+      setWinBuilding(false);
     }
   };
 
@@ -172,11 +204,12 @@ export default function DeployTestPage() {
         </SpaceBetween>
       </Container>
 
-      {/* 2. Package */}
-      <Container header={<Header variant="h2">② 패키지 빌드</Header>}>
+      {/* 2. Package (macOS/Linux) */}
+      <Container header={<Header variant="h2">② macOS/Linux 패키지 빌드</Header>}>
         <SpaceBetween size="m">
           <Box variant="small" color="text-body-secondary">
-            credential-process 바이너리 + config.json + install.sh를 zip으로 빌드합니다.
+            현재 OS용 credential-process 바이너리 + config.json + settings.json + <strong>install.sh</strong>를 담은
+            자기완결 zip(<code>{draft.profile_name}-&lt;platform&gt;.zip</code>)을 빌드합니다. mac/Linux 유저는 이것만 받으면 됩니다.
           </Box>
           <Button variant="primary" onClick={handlePackage} loading={packaging}
             disabled={deployStatus !== "success"}>
@@ -196,6 +229,42 @@ export default function DeployTestPage() {
           )}
         </SpaceBetween>
       </Container>
+
+      {/* 2-W. Windows package via CodeBuild (only when enabled) */}
+      {draft.enable_codebuild_windows && (
+        <Container header={<Header variant="h2">②-W Windows 패키지 빌드 (CodeBuild)</Header>}>
+          <SpaceBetween size="m">
+            <Box variant="small" color="text-body-secondary">
+              Windows .exe를 클라우드(CodeBuild)에서 빌드(약 15–20분)한 뒤, .exe + config.json + settings.json + <strong>install.bat</strong>를
+              담은 자기완결 <code>{draft.profile_name}-windows.zip</code>을 생성합니다. macOS 패키지와 독립이며, Deploy만 끝나면 실행됩니다.
+            </Box>
+            <Button onClick={handleWindowsBuild} loading={winBuilding}
+              disabled={deployStatus !== "success"}>
+              Windows 빌드 시작
+            </Button>
+            {deployStatus !== "success" && (
+              <Box variant="small" color="text-body-secondary">⏳ Deploy 완료 후 사용 가능 (codebuild 스택 포함)</Box>
+            )}
+            {winBuilding && (
+              <StatusIndicator type="in-progress">빌드 상태: {winStatus} — 폴링 중(15s 간격)…</StatusIndicator>
+            )}
+            {winError && <Alert type="error" dismissible onDismiss={() => setWinError("")}>{winError}</Alert>}
+            {winResult && (
+              winResult.status === "SUCCEEDED" ? (
+                <Alert type="success" header="Windows 패키지 빌드 완료">
+                  {winResult.merged
+                    ? <>자기완결 패키지 생성: <code>{String(winResult.zip_path)}</code> ({String(winResult.zip_size_mb)} MB)</>
+                    : <>빌드는 성공했으나 패키지 조립 실패: {String(winResult.message)}</>}
+                </Alert>
+              ) : (
+                <Alert type="error" header={`Windows 빌드 ${String(winResult.status)}`}>
+                  CodeBuild 콘솔에서 로그를 확인하세요. {String(winResult.message || "")}
+                </Alert>
+              )
+            )}
+          </SpaceBetween>
+        </Container>
+      )}
 
       {/* 3. Local Test */}
       {packageResult && (
@@ -237,27 +306,44 @@ aws logs filter-log-events \\
       )}
 
       {/* 4. Distribute */}
-      {packageResult && (
+      {(packageResult || (draft.enable_codebuild_windows && winResult && winResult.status === "SUCCEEDED")) && (
         <Container header={<Header variant="h2">④ 패키지 배포 (Presigned URL)</Header>}>
           <SpaceBetween size="m">
             <Box variant="small" color="text-body-secondary">
-              패키지를 S3에 업로드하고 시한부 다운로드 URL을 생성합니다 (기본 48시간).
+              패키지를 S3에 업로드하고 시한부 다운로드 URL을 생성합니다 (기본 48시간). OS별로 따로 배포합니다.
             </Box>
-            <Button variant="primary" onClick={handleDistribute} loading={distributing}>
-              Distribute
-            </Button>
+            <SpaceBetween size="s" direction="horizontal">
+              <Button variant="primary" onClick={() => handleDistribute("current")} loading={distributing === "current"}
+                disabled={!packageResult}>
+                macOS/Linux 패키지 배포
+              </Button>
+              {draft.enable_codebuild_windows && (
+                <Button onClick={() => handleDistribute("windows")} loading={distributing === "windows"}
+                  disabled={!(winResult && winResult.status === "SUCCEEDED")}>
+                  Windows 패키지 배포
+                </Button>
+              )}
+            </SpaceBetween>
+            {!packageResult && (
+              <Box variant="small" color="text-body-secondary">ℹ️ macOS/Linux 패키지는 ② 빌드 후 배포 버튼이 활성화됩니다.</Box>
+            )}
+            {draft.enable_codebuild_windows && !(winResult && winResult.status === "SUCCEEDED") && (
+              <Box variant="small" color="text-body-secondary">⏳ Windows 패키지는 ②-W 빌드 완료 후 활성화됩니다.</Box>
+            )}
             {distributeError && <Alert type="error" dismissible onDismiss={() => setDistributeError("")}>{distributeError}</Alert>}
-            {distributeResult && (
-              <Alert type="success" header="Presigned URL 생성 완료">
-                <Box variant="code">
-                  <pre style={{ fontSize: "12px", wordBreak: "break-all", whiteSpace: "pre-wrap" }}>
-                    {String(distributeResult.presigned_url)}
-                  </pre>
-                </Box>
-                <Box margin={{ top: "xs" }} variant="small">
-                  만료: {String(distributeResult.expiry_hours)}시간 | Platform: {String(distributeResult.platform)} | Size: {String(distributeResult.zip_size_mb)} MB
-                </Box>
-              </Alert>
+            {(["current", "windows"] as const).map((art) =>
+              distributeResult[art] ? (
+                <Alert key={art} type="success" header={`${art === "windows" ? "Windows" : "macOS/Linux"} Presigned URL 생성 완료`}>
+                  <Box variant="code">
+                    <pre style={{ fontSize: "12px", wordBreak: "break-all", whiteSpace: "pre-wrap" }}>
+                      {String(distributeResult[art].presigned_url)}
+                    </pre>
+                  </Box>
+                  <Box margin={{ top: "xs" }} variant="small">
+                    만료: {String(distributeResult[art].expiry_hours)}시간 | Platform: {String(distributeResult[art].platform)} | Size: {String(distributeResult[art].zip_size_mb)} MB
+                  </Box>
+                </Alert>
+              ) : null
             )}
           </SpaceBetween>
         </Container>

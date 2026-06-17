@@ -19,9 +19,12 @@ Complete your IdP **before** launching the wizard. Each guide ends with the **pr
 
 | Identity Provider | Guide |
 |---|---|
+| Identity Provider | Guide |
+|---|---|
 | **Okta** | [providers/okta-setup.md](./providers/okta-setup.md) |
 | **Microsoft Entra ID (Azure AD)** | [providers/microsoft-entra-id-setup.md](./providers/microsoft-entra-id-setup.md) |
 | **Auth0** | [providers/auth0-setup.md](./providers/auth0-setup.md) |
+| **Google** | [providers/google-setup.md](./providers/google-setup.md) |
 | **AWS Cognito User Pool** | [providers/cognito-user-pool-setup.md](./providers/cognito-user-pool-setup.md) |
 | **PingFederate / Keycloak / other generic OIDC** | [providers/generic-oidc-setup.md](./providers/generic-oidc-setup.md) |
 
@@ -40,7 +43,8 @@ Complete your IdP **before** launching the wizard. Each guide ends with the **pr
 | 20 | [MONITORING.md](./MONITORING.md) | Bedrock-native usage monitoring + CloudWatch dashboard | IT admins |
 | 21 | [ANALYTICS.md](./ANALYTICS.md) | S3 data lake + Athena queries for historical usage | IT admins |
 | 22 | [QUOTA_MONITORING.md](./QUOTA_MONITORING.md) | Per-user/per-group token quota enforcement + alerts | IT admins |
-| 23 | [COST_ATTRIBUTION.md](./COST_ATTRIBUTION.md) | Per-user/per-team cost tracking | IT admins, finance |
+| 23 | [QUOTA_ENFORCEMENT.md](./QUOTA_ENFORCEMENT.md) | Enforcement model (not an inline proxy) + token-lifetime tuning | Operators, architects |
+| 24 | [COST_ATTRIBUTION.md](./COST_ATTRIBUTION.md) | Per-user/per-team cost tracking | IT admins, finance |
 
 ## Claude Cowork (Desktop)
 

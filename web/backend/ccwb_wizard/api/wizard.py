@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -11,6 +12,31 @@ from ccwb_domain.config import Config, UnsupportedSchemaError
 from ..settings import PROFILES_DIR
 
 router = APIRouter(tags=["wizard"])
+
+
+# Provider fields populated by deploy (CFN output sync), not by the wizard form.
+# A profile save from the UI ships a fresh provider block that lacks these, which
+# would wipe deploy state (e.g. federated_role_arn, which packaging requires). Merge
+# them back from the existing profile on save.
+_DEPLOY_OWNED_PROVIDER_FIELDS = ("federated_role_arn",)
+
+
+def _preserve_deploy_owned_provider_fields(path: Path, body: dict) -> None:
+    """Keep deploy-synced provider fields when the UI re-saves a profile."""
+    if not path.exists():
+        return
+    incoming = body.get("provider")
+    if not isinstance(incoming, dict):
+        return
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8")).get("provider", {})
+    except Exception:
+        return
+    if not isinstance(existing, dict):
+        return
+    for key in _DEPLOY_OWNED_PROVIDER_FIELDS:
+        if not incoming.get(key) and existing.get(key):
+            incoming[key] = existing[key]
 
 
 class ProfileResponse(BaseModel):
@@ -44,8 +70,9 @@ async def get_profile(name: str) -> dict:
 async def save_profile(name: str, body: dict) -> dict:
     """Create or update a profile."""
     body["profile_name"] = name
-    config = Config(**{k: v for k, v in body.items() if k in Config.__dataclass_fields__})
     path = PROFILES_DIR / f"{name}.json"
+    _preserve_deploy_owned_provider_fields(path, body)
+    config = Config(**{k: v for k, v in body.items() if k in Config.__dataclass_fields__})
     config.save(path)
     return {"status": "saved", "profile_name": name}
 

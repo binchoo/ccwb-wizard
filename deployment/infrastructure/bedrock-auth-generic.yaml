@@ -22,10 +22,6 @@ Parameters:
     MinLength: 1
     MaxLength: 256
 
-  OidcThumbprintList:
-    Type: CommaDelimitedList
-    Description: SHA-1 thumbprint(s) of the JWKS endpoint TLS root cert (40 hex chars each, comma-separated for rotation)
-
   IdentityPoolName:
     Type: String
     Default: claude-code-oidc
@@ -57,6 +53,7 @@ Conditions:
   UseDirectIAM: !Equals [!Ref FederationType, direct]
   UseCognitoIdentity: !Equals [!Ref FederationType, cognito]
   MonitoringEnabled: !Equals [!Ref EnableMonitoring, 'true']
+  IsGoogleIssuer: !Equals [!Ref OidcIssuerUrl, 'https://accounts.google.com']
   # Partition-aware conditions for Cognito Identity service principals
   IsGovCloudWest: !Equals [!Ref 'AWS::Region', 'us-gov-west-1']
   IsGovCloudEast: !Equals [!Ref 'AWS::Region', 'us-gov-east-1']
@@ -72,7 +69,10 @@ Resources:
       Url: !Ref OidcIssuerUrl
       ClientIdList:
         - !Ref OidcClientId
-      ThumbprintList: !Ref OidcThumbprintList
+      # ThumbprintList is intentionally omitted. IAM secures communication with OIDC IdPs
+      # whose certificates chain to a trusted CA without using a thumbprint; for the rare
+      # private/self-signed CA case IAM retrieves the thumbprint from the IdP endpoint
+      # automatically. See https://aws.amazon.com/about-aws/whats-new/2024/07/aws-identity-access-management-open-id-connect-identity-providers
       Tags:
         - Key: Purpose
           Value: Claude Code OIDC Authentication
@@ -170,6 +170,11 @@ Resources:
             Action:
               - 'sts:AssumeRoleWithWebIdentity'
               - 'sts:TagSession'
+            Condition: !If
+              - IsGoogleIssuer
+              - StringEquals:
+                  'accounts.google.com:aud': !Ref OidcClientId
+              - !Ref 'AWS::NoValue'
       ManagedPolicyArns:
         - !Ref BedrockAccessPolicy
       Tags:
