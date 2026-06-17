@@ -137,6 +137,13 @@ async def exchange_code(body: dict) -> TestConnectionResponse:
             "code_verifier": code_verifier,
         }
 
+        # Confidential clients (e.g. Google "Web application", Auth0 Regular Web App)
+        # require the client secret at the token endpoint even when PKCE is used.
+        # Public clients (Keycloak public client, Auth0 Native) omit it.
+        client_secret = provider.get("client_secret", "")
+        if client_secret:
+            token_data["client_secret"] = client_secret
+
         resp = requests.post(endpoints["token"], data=token_data, timeout=10)
         if resp.status_code != 200:
             return TestConnectionResponse(
