@@ -1,6 +1,6 @@
 # Complete Okta Setup Guide for Amazon Bedrock Integration
 
-This guide walks you through setting up Okta from scratch to work with the AWS Cognito Identity Pool for Bedrock access.
+This guide walks you through setting up Okta from scratch to work with the federated IAM authentication used for Bedrock access (via `AssumeRoleWithWebIdentity`).
 
 ## Table of Contents
 
@@ -170,22 +170,14 @@ You now have everything needed for the CloudFormation deployment:
 | **OktaDomain**   | Your Okta domain | `dev-12345678.okta.com` |
 | **OktaClientId** | Your Client ID   | `0oa1234567890abcde`    |
 
-### Use the values with ccwb init
+### Use the values in the wizard
 
-When running `poetry run ccwb init`, you'll be prompted for these values:
+When you launch the wizard with `uv run ccwb`, the **Identity Provider** page (Page 2) prompts for these values:
 
-```bash
-poetry run ccwb init
+- **Provider domain:** `dev-12345678.okta.com` (your domain from above)
+- **Client ID:** `0oa1234567890abcde` (your Client ID from above)
 
-# The wizard will ask for:
-# - Okta Domain: dev-12345678.okta.com    (your domain from above)
-# - Client ID: 0oa1234567890abcde         (your Client ID from above)
-# - AWS Region for infrastructure: us-east-1
-# - Bedrock regions: us-east-1,us-west-2
-# - Enable monitoring: Yes/No
-```
-
-The CLI tool will handle all the CloudFormation configuration automatically.
+The wizard auto-detects Okta from the domain, runs a connection test (claims preview), and lets you map claims to attribution dimensions. AWS region, Bedrock model, and logging are configured on later pages. The wizard handles all CloudFormation configuration automatically — see [QUICK_START.md](../../../QUICK_START.md).
 
 ---
 
@@ -323,27 +315,9 @@ If using group-based quotas:
 
 ### Deploy and Configure Quota Monitoring
 
-After completing Okta configuration:
+After completing Okta configuration, enable quota monitoring on the wizard's **Logging & quota** page (Page 5) and deploy on Page 10. Quota policies are configured through the wizard and the OIDC settings are passed automatically from your profile.
 
-```bash
-# Deploy the quota monitoring stack
-poetry run ccwb deploy quota
-
-# Set a default quota for all users (required)
-poetry run ccwb quota set-default --monthly-limit 225M
-
-# Optional: Set group-based quotas (requires groups claim)
-poetry run ccwb quota set-group engineering --monthly-limit 500M
-poetry run ccwb quota set-group data-science --monthly-limit 1B
-
-# Optional: Set user-specific quotas
-poetry run ccwb quota set-user power.user@company.com --monthly-limit 500M
-
-# Test the quota API
-poetry run ccwb test quota-api
-```
-
-### Verifying Your Configuration
+For complete quota monitoring documentation, see [Quota Monitoring Guide](../QUOTA_MONITORING.md).
 
 Test that your JWT includes the expected claims:
 
@@ -388,16 +362,19 @@ Per-user Bedrock costs are tracked automatically via the session name — no IdP
 
 Once you've completed this Okta setup:
 
-1. Clone the repository:
+1. Clone the repository and build the wizard:
    ```bash
-   git clone https://github.com/aws-solutions-library-samples/guidance-for-claude-code-with-amazon-bedrock.git
-   cd claude-code-setup
-   poetry install
+   git clone <repository-url>
+   cd ccwb
+   uv sync --all-packages
+   make build
    ```
-2. Run the setup wizard: `poetry run ccwb init`
-3. Create a distribution package: `poetry run ccwb package`
-4. Test the deployment: `poetry run ccwb test --api`
-5. Distribute the `dist/` folder to your users
+2. Launch the wizard: `uv run ccwb`
+3. On Page 2, enter your Okta domain and Client ID; complete the remaining pages.
+4. On Page 10, run Deploy → Package → Test.
+5. Distribute the package to your users.
+
+See [QUICK_START.md](../../../QUICK_START.md) for the full walkthrough.
 
 ---
 

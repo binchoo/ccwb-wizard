@@ -29,13 +29,13 @@ The quota monitoring system is an optional CloudFormation stack that integrates 
 
 > **Prerequisites**: Monitoring must be enabled and the dashboard stack deployed. See the [CLI Reference](CLI_REFERENCE.md#deploy---deploy-infrastructure) for deployment details.
 
-During `ccwb init`, quota monitoring is **enabled by default** when monitoring is enabled. You'll be prompted to configure:
+On the wizard's **Logging & quota** page (Page 5), enable quota monitoring and configure:
 - Monthly token limit per user (default: 225 million tokens)
 - Automatic threshold calculation (80% warning at 180M, 90% critical at 202.5M)
 - Daily token limit with burst buffer (auto-calculated from monthly)
 - Enforcement modes for daily and monthly limits
 
-Deploy using `poetry run ccwb deploy` (deploys all enabled stacks) or `poetry run ccwb deploy quota` for just the quota stack. The OIDC configuration is automatically passed from your profile settings. For complete deployment instructions, see the [CLI Reference](CLI_REFERENCE.md#deploy---deploy-infrastructure).
+Deploy from the wizard's **Deploy & test** page (Page 10) — the quota stack deploys along with the other enabled stacks, and the OIDC configuration is passed automatically from your profile settings.
 
 ## Configuration Settings
 
@@ -52,7 +52,7 @@ Deploy using `poetry run ccwb deploy` (deploys all enabled stacks) or `poetry ru
 | Alert Retention         | 60 days     | DynamoDB TTL for deduplication                 |
 | EnableFinegrainedQuotas | false       | Enable fine-grained policy support             |
 
-To update limits: Re-run `ccwb init` and redeploy with `ccwb deploy quota`.
+To update limits: re-run the wizard and redeploy from the **Deploy & test** page.
 
 ## Daily Limits and Bill Shock Protection
 
@@ -295,7 +295,7 @@ To request an unblock, contact your administrator.
 
 By default, quota is re-checked every 30 minutes even when credentials are cached. This closes the enforcement gap where users could continue working for up to 12 hours after being blocked (the credential cache duration).
 
-Configure during `ccwb init`:
+Configure on the wizard's **Logging & quota** page (Page 5):
 
 | Interval | Check Frequency | Max Enforcement Delay | UX Impact |
 |----------|----------------|----------------------|-----------|
@@ -551,7 +551,7 @@ This ensures:
 
 #### Deployment Configuration
 
-When using `ccwb deploy quota`, the OIDC configuration is **automatically passed** from your profile settings (configured during `ccwb init`). No manual parameter configuration is required.
+When deploying from the wizard's **Deploy & test** page, the OIDC configuration is **automatically passed** from your profile settings (configured on Page 2). No manual parameter configuration is required.
 
 For manual CloudFormation deployments, provide your OIDC configuration:
 

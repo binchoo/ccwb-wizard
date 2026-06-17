@@ -134,7 +134,7 @@ Enterprise Entra ID tenants often prohibit public client flows. The credential p
 3. Set a description (e.g. `ccwb-credential-provider`) and an expiry
 4. Click **Add** and **copy the secret value immediately** — it is not shown again
 
-When `ccwb init` asks for the Azure authentication mode, select **Confidential client — client secret** and paste the value. The secret is stored securely in the **OS secure storage** (keyring) on the admin machine.
+When the wizard asks for the Azure authentication mode (Page 2), select **Confidential client — client secret** and paste the value. The secret is stored securely in the **OS secure storage** (keyring) on the admin machine.
 
 #### Distributing to end users
 
@@ -156,7 +156,7 @@ CCWB_CLIENT_SECRET=<your-client-secret> ~/claude-code-with-bedrock/credential-pr
 
 #### Rotating the secret
 
-When you rotate the secret in Entra ID, re-run `ccwb init` on the admin machine and repeat the `--set-client-secret` command on each user machine (or push it via MDM).
+When you rotate the secret in Entra ID, re-run the wizard on the admin machine and repeat the `--set-client-secret` command on each user machine (or push it via MDM).
 
 To clear a stored secret from a machine:
 
@@ -206,9 +206,9 @@ Decide on consistent paths for your deployment, for example:
 - macOS/Linux: `~/claude-code-with-bedrock/cert.pem` and `~/claude-code-with-bedrock/key.pem`
 - Windows: `%USERPROFILE%\claude-code-with-bedrock\cert.pem`
 
-You will enter these paths when running `ccwb init`.
+You will enter these paths in the wizard.
 
-> **Note on absolute paths**: If you enter absolute paths during `ccwb init`, the `ccwb package` command will warn you that those paths are machine-specific and may not resolve on end-user machines with a different install layout. Prefer paths relative to the home directory (e.g. `~/claude-code-with-bedrock/cert.pem`) where possible.
+> **Note on absolute paths**: If you enter absolute paths in the wizard, the packaging step will warn you that those paths are machine-specific and may not resolve on end-user machines with a different install layout. Prefer paths relative to the home directory (e.g. `~/claude-code-with-bedrock/cert.pem`) where possible.
 
 #### Step 5.5: Override certificate paths on end-user machines (if needed)
 
@@ -275,7 +275,7 @@ You now have everything needed for deployment:
 |---|---|---|
 | **Provider Domain** | Your tenant URL | `login.microsoftonline.com/{tenant-id}/v2.0` |
 | **Client ID** | Your Application ID | `12345678-1234-1234-1234-123456789012` |
-| **Client secret** *(if using Option A)* | Secret value from Step 5A | *(entered interactively during `ccwb init`)* |
+| **Client secret** *(if using Option A)* | Secret value from Step 5A | *(entered interactively in the wizard)* |
 | **Certificate path** *(if using Option B)* | Path to `cert.pem` on user machine | `~/claude-code-with-bedrock/cert.pem` |
 | **Key path** *(if using Option B)* | Path to `key.pem` on user machine | `~/claude-code-with-bedrock/key.pem` |
 
@@ -290,11 +290,11 @@ The CLI accepts multiple formats for the Azure provider domain:
 | **Just the tenant ID** | `c56f9106-1d27-456d-bd20-3de87e595a36` | Simplest format |
 | **With https:// prefix** | `https://login.microsoftonline.com/...` | Protocol stripped automatically |
 
-> **Note**: The CLI automatically extracts the tenant ID GUID from any of these formats.
+> **Note**: The wizard automatically extracts the tenant ID GUID from any of these formats.
 
-### Use the values with ccwb init
+### Use the values in the wizard
 
-When running `ccwb init`, the wizard will ask:
+On the wizard's **Identity Provider** page (Page 2), you will provide:
 
 ```
 Enter your OIDC provider domain:
@@ -372,7 +372,7 @@ Should return a JSON response with OIDC configuration.
 Your tenant has `Allow public client flows = No`. You must configure a confidential client:
 
 - Follow [Section 5](#5-confidential-client-setup-enterprise) to set up a client secret or certificate
-- Re-run `ccwb init` and select the appropriate confidential client mode
+- Re-launch the wizard and select the appropriate confidential client mode
 
 ### "Parameter AzureTenantId failed to satisfy constraint" Error
 
@@ -387,7 +387,7 @@ This error occurs during deployment if the tenant ID format is incorrect. The fi
 
 - Verify the paths in `config.json` match the actual file locations on this machine
 - On macOS/Linux, paths starting with `~/` are expanded automatically
-- If the paths differ from what was set during `ccwb init`, set `AZURE_CLIENT_CERTIFICATE_PATH` and `AZURE_CLIENT_CERTIFICATE_KEY_PATH` environment variables to override them without editing `config.json` (see [Step 5.5](#step-55-override-certificate-paths-on-end-user-machines-if-needed))
+- If the paths differ from what was set in the wizard, set `AZURE_CLIENT_CERTIFICATE_PATH` and `AZURE_CLIENT_CERTIFICATE_KEY_PATH` environment variables to override them without editing `config.json` (see [Step 5.5](#step-55-override-certificate-paths-on-end-user-machines-if-needed))
 - Check file permissions: the credential provider process must be able to read both files
 
 ---
@@ -402,16 +402,19 @@ Per-user Bedrock costs are tracked automatically via the session name — no IdP
 
 Once you've completed this setup:
 
-1. Clone the repository:
+1. Clone the repository and build the wizard:
    ```bash
-   git clone https://github.com/aws-solutions-library-samples/guidance-for-claude-code-with-amazon-bedrock.git
-   cd claude-code-setup
-   poetry install
+   git clone <repository-url>
+   cd ccwb
+   uv sync --all-packages
+   make build
    ```
-2. Run the setup wizard: `ccwb init`
-3. Create a distribution package: `ccwb package`
-4. Test the deployment: `ccwb test --api`
-5. Distribute the `dist/` folder to your users
+2. Launch the wizard: `uv run ccwb`
+3. On Page 2, enter your provider domain, Client ID, and auth mode; complete the remaining pages.
+4. On Page 10, run Deploy → Package → Test.
+5. Distribute the package to your users.
+
+See [QUICK_START.md](../../../QUICK_START.md) for the full walkthrough.
 
 ---
 

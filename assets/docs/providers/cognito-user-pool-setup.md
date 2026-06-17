@@ -60,22 +60,15 @@ aws cloudformation describe-stacks \
 
 ### 3. Configure Claude Code
 
-```bash
-# Initialize Claude Code with your User Pool
-poetry run ccwb init
+Launch the wizard with `uv run ccwb`. On the **Identity Provider** page (Page 2), select/confirm Cognito User Pool and enter:
 
-# When prompted, enter:
-# - Provider Domain: <your-domain-prefix>.auth.<region>.amazoncognito.com
-# - User Pool ID: <from step 2>
-# - Client ID: <from step 2>
-```
+- **Provider domain:** `<your-domain-prefix>.auth.<region>.amazoncognito.com`
+- **User Pool ID:** `<from step 2>`
+- **Client ID:** `<from step 2>`
 
-### 4. Deploy the Identity Pool
+### 4. Deploy the authentication infrastructure
 
-```bash
-# Deploy the authentication infrastructure
-poetry run ccwb deploy --type auth
-```
+Complete the remaining wizard pages, then on the **Deploy & test** page (Page 10) run **Deploy**. The auth stack (IAM OIDC provider / Cognito Identity Pool + federated role) deploys automatically along with the other enabled stacks.
 
 ## Configuration Options
 

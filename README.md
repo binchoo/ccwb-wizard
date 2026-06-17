@@ -38,7 +38,7 @@ CloudWatch Logs Insights dashboard (grouped by user / team / dept, cost by model
 ```
 
 The mapping is **dynamic** — re-evaluated on each auth event, not frozen at install time.
-See [ANTHROPIC_CUSTOM_HEADERS_GUIDE.md](ANTHROPIC_CUSTOM_HEADERS_GUIDE.md) for the header
+See [ANTHROPIC_CUSTOM_HEADERS_GUIDE.md](assets/docs/ANTHROPIC_CUSTOM_HEADERS_GUIDE.md) for the header
 contract (16-key / 256-char limits, `b64:` encoding of non-ASCII values, untagged-call
 handling).
 
@@ -178,10 +178,8 @@ Restart Claude Code afterward.
 |-----|----------------|
 | [QUICK_START.md](QUICK_START.md) | Full CLI deployment walkthrough |
 | [web/README.md](web/README.md) | Web wizard architecture, dev setup, step-by-step flow |
-| [ANTHROPIC_CUSTOM_HEADERS_GUIDE.md](ANTHROPIC_CUSTOM_HEADERS_GUIDE.md) | Magic-header / attribution contract |
+| [ANTHROPIC_CUSTOM_HEADERS_GUIDE.md](assets/docs/ANTHROPIC_CUSTOM_HEADERS_GUIDE.md) | Magic-header / attribution contract |
 | [USER_LIFECYCLE_RUNBOOK.md](web/binaries/credential_provider/USER_LIFECYCLE_RUNBOOK.md) | Operator runbook for member lifecycle |
-| [MIGRATION.md](MIGRATION.md) | Migration notes |
-| [CHANGELOG.md](CHANGELOG.md) | Release history |
 
 ---
 

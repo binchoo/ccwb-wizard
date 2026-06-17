@@ -213,7 +213,7 @@ def sanitize_for_bedrock(raw: dict) -> dict:
 def build_header_line(metadata: dict) -> str:
     """Serialize a sanitized metadata dict to the single header line value.
 
-    Output format matches the contract documented in ANTHROPIC_CUSTOM_HEADERS_GUIDE.md:
+    Output format matches the contract documented in assets/docs/ANTHROPIC_CUSTOM_HEADERS_GUIDE.md:
 
         X-Amzn-Bedrock-Request-Metadata: {"key1":"v1","key2":"v2"}
 

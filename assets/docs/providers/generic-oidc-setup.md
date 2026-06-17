@@ -2,14 +2,14 @@
 
 This guide covers setting up a generic OIDC identity provider for use with Amazon Bedrock. Use this path when your IdP is **not** Okta, Auth0, Microsoft Entra ID (Azure AD), or AWS Cognito User Pool — for example PingFederate, Keycloak, ForgeRock, or a custom OIDC-compliant deployment.
 
-> **Why this guide exists:** Earlier versions of this solution treated the "Okta (or generic OIDC)" choice as Okta-specific. Selecting it for a non-Okta IdP failed in several places (CFN domain regex, hardcoded Okta thumbprint, Okta-only OAuth endpoint paths). The dedicated `Generic OIDC` choice in `ccwb init` fixes this.
+> **Why this guide exists:** Earlier versions of this solution treated the "Okta (or generic OIDC)" choice as Okta-specific. Selecting it for a non-Okta IdP failed in several places (CFN domain regex, hardcoded Okta thumbprint, Okta-only OAuth endpoint paths). The dedicated `Generic OIDC` choice in the wizard fixes this.
 
 ## Table of Contents
 
 1. [Prerequisites](#1-prerequisites)
 2. [Create OIDC Application in Your IdP](#2-create-oidc-application-in-your-idp)
 3. [Collect Required Information](#3-collect-required-information)
-4. [Run ccwb init](#4-run-ccwb-init)
+4. [Launch the wizard](#4-launch-the-wizard)
 5. [Worked Example: PingFederate](#5-worked-example-pingfederate)
 6. [Worked Example: Keycloak](#6-worked-example-keycloak)
 7. [Troubleshooting](#7-troubleshooting)
@@ -21,11 +21,11 @@ This guide covers setting up a generic OIDC identity provider for use with Amazo
 Your IdP must:
 
 - Implement **OIDC 1.0** with the **Authorization Code + PKCE** flow (the credential helper does not support implicit, ROPC, or device flows).
-- Issue tokens whose `iss` claim **exactly** matches the issuer URL you configure in `ccwb init`. AWS IAM validates this on every `AssumeRoleWithWebIdentity` call.
+- Issue tokens whose `iss` claim **exactly** matches the issuer URL you configure in the wizard. AWS IAM validates this on every `AssumeRoleWithWebIdentity` call.
 - Allow `http://localhost:8400/callback` as a redirect URI for your application registration.
 - Expose a public JWKS endpoint (the URL is required at deploy time and at every token validation).
 
-If your IdP also publishes `/.well-known/openid-configuration`, `ccwb init` will auto-discover the endpoint URLs for you. Most modern IdPs do.
+If your IdP also publishes `/.well-known/openid-configuration`, the wizard will auto-discover the endpoint URLs for you. Most modern IdPs do.
 
 ---
 
@@ -47,7 +47,7 @@ Do **not** set a client secret. The credential helper uses PKCE instead.
 
 ## 3. Collect Required Information
 
-Before running `ccwb init`, gather these five values:
+Before launching the wizard, gather these five values:
 
 | Value | Description | Example |
 |---|---|---|
@@ -57,28 +57,26 @@ Before running `ccwb init`, gather these five values:
 | **Token endpoint** | Full URL the credential helper POSTs to for code exchange. | `https://auth.example.com/as/token.oauth2` |
 | **JWKS URI** | Public JWKS endpoint that AWS IAM uses to validate ID tokens. | `https://auth.example.com/pf/JWKS` |
 
-You also need the **SHA-1 thumbprint** of the JWKS endpoint's TLS leaf certificate. `ccwb init` computes this automatically via TLS handshake — the manual command is in the [Troubleshooting](#7-troubleshooting) section if auto-computation fails.
+You also need the **SHA-1 thumbprint** of the JWKS endpoint's TLS leaf certificate. The wizard computes this automatically via TLS handshake — the manual command is in the [Troubleshooting](#7-troubleshooting) section if auto-computation fails.
 
-> **Tip:** Most of these come straight from `{issuer}/.well-known/openid-configuration`. `ccwb init` queries that automatically and pre-fills the prompts.
+> **Tip:** Most of these come straight from `{issuer}/.well-known/openid-configuration`. The wizard queries that automatically and pre-fills the prompts.
 
 ---
 
-## 4. Run ccwb init
+## 4. Launch the wizard
 
 ```bash
-cd source
-poetry install
-poetry run ccwb init
+uv run ccwb
 ```
 
-When the wizard asks "Select your identity provider type", choose **Generic OIDC (PingFederate, Keycloak, ForgeRock, etc.)**. The wizard will:
+On the **Identity Provider** page (Page 2), when asked "Select your identity provider type", choose **Generic OIDC (PingFederate, Keycloak, ForgeRock, etc.)**. The wizard will:
 
 1. Prompt for the issuer URL.
-2. Query `{issuer}/.well-known/openid-configuration`. If discovery succeeds, the next three prompts (authorization endpoint, token endpoint, JWKS URI) are pre-filled — confirm or override.
-3. Open a TLS connection to your JWKS endpoint to compute the leaf-cert SHA-1 thumbprint. The next prompt is pre-filled — confirm or override.
-4. Continue with federation type, region, model selection, etc.
+2. Query `{issuer}/.well-known/openid-configuration`. If discovery succeeds, the authorization endpoint, token endpoint, and JWKS URI are pre-filled — confirm or override.
+3. Open a TLS connection to your JWKS endpoint to compute the leaf-cert SHA-1 thumbprint — confirm or override.
+4. Continue with the remaining pages (infra name, model, logging, etc.).
 
-The resulting profile is saved to `~/.ccwb/profiles/<name>.json` with these new fields:
+The resulting profile is saved to `~/.ccwb/profiles/<name>.json` with these fields:
 
 ```json
 {
@@ -91,13 +89,7 @@ The resulting profile is saved to `~/.ccwb/profiles/<name>.json` with these new 
 }
 ```
 
-Then deploy:
-
-```bash
-poetry run ccwb deploy auth
-```
-
-This applies `deployment/infrastructure/bedrock-auth-generic.yaml`, which provisions the IAM OIDC Provider with your issuer URL and thumbprint, plus the federated role and Bedrock policy.
+Then on the **Deploy & test** page (Page 10), run **Deploy**. This applies `deployment/infrastructure/bedrock-auth-generic.yaml`, which provisions the IAM OIDC Provider with your issuer URL and thumbprint, plus the federated role and Bedrock policy.
 
 ---
 
@@ -115,13 +107,13 @@ PingFederate (self-hosted or PingOne) typically uses these endpoint paths:
 **In the PingFederate admin console:**
 
 1. **Applications → OAuth → Clients** → **Add Client**.
-2. Set **Client ID** (you'll enter this in `ccwb init`).
+2. Set **Client ID** (you'll enter this in the wizard).
 3. **Client Authentication** → **None** (we use PKCE).
 4. **Allowed Grant Types** → check **Authorization Code**. Optional: **Refresh Token**.
 5. **Redirect URIs** → `http://localhost:8400/callback`.
 6. **Require Proof Key for Code Exchange (PKCE)** → check.
 7. **Allowed Scopes** → `openid`, `profile`, `email`.
-8. Save, then complete `ccwb init` using the **Generic OIDC** option. PingFederate publishes `/.well-known/openid-configuration` by default, so endpoint discovery should succeed.
+8. Save, then complete the wizard's IdP page using the **Generic OIDC** option. PingFederate publishes `/.well-known/openid-configuration` by default, so endpoint discovery should succeed.
 
 ---
 
@@ -150,7 +142,7 @@ Keycloak's URL layout is realm-scoped:
 10. **Proof Key for Code Exchange Code Challenge Method** → `S256`.
 11. Save.
 
-`ccwb init` discovery will work against the realm-scoped issuer URL.
+The wizard's discovery will work against the realm-scoped issuer URL.
 
 ---
 
@@ -169,7 +161,7 @@ echo | openssl s_client -servername <jwks-host> -connect <jwks-host>:443 2>/dev/
   | openssl x509 -fingerprint -sha1 -noout
 ```
 
-Strip the colons and lowercase the result before pasting into `ccwb init`.
+Strip the colons and lowercase the result before pasting into the wizard.
 
 ### `Token is not from a supported provider` from STS
 
@@ -179,7 +171,7 @@ The `iss` claim in your ID token does not exactly match the issuer URL configure
 - Keycloak realm name mismatch (typo, wrong realm).
 - IdP returns the issuer with a different host than the one you registered (e.g. internal vs external hostname).
 
-Re-run `ccwb init` and pin the issuer URL to whatever your IdP literally puts in the `iss` claim. You can decode a sample token at [jwt.io](https://jwt.io) to confirm.
+Re-launch the wizard and pin the issuer URL to whatever your IdP literally puts in the `iss` claim. You can decode a sample token at [jwt.io](https://jwt.io) to confirm.
 
 ### `Authentication timeout - no authorization code received`
 
@@ -201,7 +193,7 @@ echo | openssl s_client -servername "$HOST" -connect "$HOST:443" 2>/dev/null \
 
 ### My IdP rotates the JWKS cert. What do I do?
 
-The IAM OIDC Provider accepts multiple thumbprints. For now, the wizard only collects one — to add a second, edit `~/.ccwb/profiles/<name>.json` and set `oidc_thumbprint` to a comma-separated list, then redeploy with `poetry run ccwb deploy auth`.
+The IAM OIDC Provider accepts multiple thumbprints. For now, the wizard only collects one — to add a second, edit `~/.ccwb/profiles/<name>.json` and set `oidc_thumbprint` to a comma-separated list, then redeploy from the wizard's **Deploy & test** page.
 
 ---
 
@@ -213,10 +205,10 @@ Per-user Bedrock costs are tracked automatically via the session tag — no IdP 
 
 ## Next Steps
 
-After `ccwb init` succeeds:
+After the wizard's IdP page validates your configuration, complete the remaining pages and go to **Deploy & test** (Page 10):
 
-```bash
-poetry run ccwb deploy        # deploy all configured stacks
-poetry run ccwb test --api    # smoke-test authentication + Bedrock invoke
-poetry run ccwb package       # build distribution for end users
-```
+1. **Deploy** — deploys all configured CFN stacks
+2. **Package** — builds the distribution for end users
+3. **Test** — smoke-tests authentication + Bedrock invoke
+
+See [QUICK_START.md](../../../QUICK_START.md) for the full walkthrough.
