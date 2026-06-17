@@ -331,6 +331,36 @@ credential-process --profile <name>
 
 After a successful login the helper caches temporary AWS credentials, writes the attribution "magic header" into `~/.claude/settings.json`, and prints the resolved `user` / `team` / `dept` values. AWS credentials are never printed to the terminal.
 
+The sequence below shows what happens end to end on that first login — and, crucially, **where trust comes from versus where attribution comes from**:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Developer
+    participant CC as Claude Code
+    participant CP as credential-process
+    participant IdP as OIDC IdP<br/>(Okta / Google / ...)
+    participant STS as AWS STS
+    participant BR as Amazon Bedrock
+    participant Logs as CloudWatch Logs
+
+    User->>CP: credential-process --profile <name>
+    CP->>IdP: Authorization Code + PKCE (browser)
+    IdP-->>CP: signed ID token (claims: email, groups, dept, ...)
+    CP->>STS: AssumeRoleWithWebIdentity(ID token)
+    Note over STS: validates token signature + issuer<br/>role-session name = IdP-asserted identity
+    STS-->>CP: temporary AWS credentials (12h)
+    CP->>CP: map claims → magic header<br/>write ~/.claude/settings.json
+    CP-->>User: print user/team/dept (never the credentials)
+
+    User->>CC: start Claude Code
+    CC->>BR: InvokeModel + X-Amzn-Bedrock-Request-Metadata header
+    BR->>Logs: model-invocation log<br/>($.requestMetadata.{user,team,dept})
+    Note over BR,Logs: trust anchor = STS role session (step 5)<br/>attribution = header (steps 7, 11) — separate concerns
+```
+
+The split highlighted in the final note is the part that trips up most readers: **the temporary credentials are what authorize the Bedrock call** (anchored to the IdP-asserted STS role session), while **the magic header is only metadata for the dashboard**. A user cannot forge access by editing the header — at worst they mislabel their own usage, which surfaces as untagged or misattributed calls in the dashboard.
+
 ### Step 8.4 — Claude Code startup
 
 From here the user simply runs Claude Code as usual — the `~/.claude/settings.json` env block routes every request through Bedrock (`CLAUDE_CODE_USE_BEDROCK=1`) using the cached credentials. No model configuration is required; the wizard already pinned the Sonnet/Haiku/Opus model IDs.
