@@ -58,8 +58,6 @@ class GoogleProvider(IdentityProvider):
 
     @classmethod
     def wizard_inputs(cls) -> list[FormField]:
-        # client_id only. The client secret is intentionally NOT collected here — it
-        # is injected per-machine into the OS keyring (see google-setup.md).
         return [
             FormField(
                 name="client_id",
@@ -67,11 +65,15 @@ class GoogleProvider(IdentityProvider):
                 placeholder="xxxx.apps.googleusercontent.com",
                 required=True,
                 validator="min_length:10",
-                help_text=(
-                    "Use a 'Desktop app' OAuth client. The client secret is NOT entered "
-                    "here — install it per machine with "
-                    "'credential-process --set-client-secret'."
-                ),
+                help_text="'Desktop app' 타입 OAuth 클라이언트 ID",
+            ),
+            FormField(
+                name="client_secret",
+                label="Google Client Secret",
+                placeholder="GOCSPX-...",
+                required=True,
+                sensitive=True,
+                help_text="위저드가 이 머신의 OS keychain에 저장합니다. config.json에는 포함되지 않습니다.",
             ),
         ]
 

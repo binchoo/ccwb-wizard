@@ -166,6 +166,9 @@ Resources:
             Action:
               - 'sts:AssumeRoleWithWebIdentity'
               - 'sts:TagSession'
+            Condition:
+              StringEquals:
+                'accounts.google.com:aud': !Ref GoogleClientId
       ManagedPolicyArns:
         - !Ref BedrockAccessPolicy
       Tags:

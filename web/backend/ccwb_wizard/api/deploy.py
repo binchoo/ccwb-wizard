@@ -235,6 +235,7 @@ _RECREATE_STATES = {
     "ROLLBACK_FAILED",
     "CREATE_FAILED",
     "DELETE_FAILED",
+    "UPDATE_ROLLBACK_COMPLETE",  # previous update failed and rolled back cleanly; safest to recreate
 }
 
 

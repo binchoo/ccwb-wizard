@@ -137,10 +137,18 @@ async def exchange_code(body: dict) -> TestConnectionResponse:
             "code_verifier": code_verifier,
         }
 
-        # Confidential clients (e.g. Google "Web application", Auth0 Regular Web App)
-        # require the client secret at the token endpoint even when PKCE is used.
-        # Public clients (Keycloak public client, Auth0 Native) omit it.
+        # Confidential clients require the client secret at the token endpoint even
+        # when PKCE is used. Google's secret lives in the OS keychain (never in
+        # config.json); load it from there for the connection test.
         client_secret = provider.get("client_secret", "")
+        if not client_secret and ptype == "google":
+            profile_name = body.get("profile_name", "")
+            if profile_name:
+                try:
+                    from ccwb_domain.secrets import read_secret
+                    client_secret = read_secret(profile_name, "client-secret") or ""
+                except Exception:
+                    pass
         if client_secret:
             token_data["client_secret"] = client_secret
 
@@ -238,6 +246,12 @@ def _resolve_endpoints(ptype: str, provider: dict, aws_region: str) -> dict[str,
                 "generic: provider.authorization_endpoint and token_endpoint required"
             )
         return {"authorize": auth_ep, "token": token_ep}
+
+    if ptype == "google":
+        return {
+            "authorize": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token": "https://oauth2.googleapis.com/token",
+        }
 
     raise ValueError(f"Unknown provider type: '{ptype}'")
 

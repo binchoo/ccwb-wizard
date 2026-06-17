@@ -48,7 +48,7 @@ export default function ProviderPage() {
     if (providerType === "cognito" && draft.aws_region) {
       setLoadingPools(true);
       fetch(`/api/aws/cognito-pools?region=${draft.aws_region}`)
-        .then((r) => r.json())
+        .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
         .then((pools: CognitoPool[]) => setCognitoPools(pools))
         .catch(() => setCognitoPools([]))
         .finally(() => setLoadingPools(false));
@@ -184,17 +184,13 @@ export default function ProviderPage() {
             </FormField>
           )) : null}
 
-          {/* Google: client secret is never entered here — it is injected per-machine
-              into the OS keyring. PKCE is the real defense; the secret is non-confidential. */}
-          {providerType === "google" && (
-            <Alert type="info" data-testid="google-secret-notice" header="Client secret은 위저드에 입력하지 않습니다">
-              Google "Desktop app" 클라이언트는 토큰 교환에 client secret이 필요하지만, 보안상 패키지에 담지 않습니다.
-              각 사용자 머신에서 OS 보안 저장소(keyring)에 직접 주입하세요:
-              <Box variant="code" margin={{ top: "xs" }}>
-                credential-process --set-client-secret --profile {(draft.profile_name as string) || "ClaudeCode"}
-              </Box>
-              실제 방어선은 PKCE이며 이 secret은 기밀로 취급되지 않습니다. 자세한 내용은 google-setup.md를 참고하세요.
-            </Alert>
+          {/* Google: client_secret saved to OS keychain via wizard; not written to config.json.
+              End-users who receive the package must still run --set-client-secret. */}
+          {providerType === "google" && draft.provider?.client_secret && (
+            <GoogleSecretSaver
+              profileName={(draft.profile_name as string) || ""}
+              clientSecret={(draft.provider.client_secret as string) || ""}
+            />
           )}
 
           {/* IdP Connection Test */}
@@ -202,6 +198,7 @@ export default function ProviderPage() {
             <ConnectionTest
               provider={draft.provider as Record<string, string>}
               awsRegion={draft.aws_region}
+              profileName={(draft.profile_name as string) || ""}
             />
           )}
 
@@ -221,9 +218,11 @@ export default function ProviderPage() {
 function ConnectionTest({
   provider,
   awsRegion,
+  profileName,
 }: {
   provider: Record<string, string>;
   awsRegion: string;
+  profileName: string;
 }) {
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [claims, setClaims] = useState<Record<string, unknown> | null>(null);
@@ -308,6 +307,7 @@ function ConnectionTest({
             aws_region: awsRegion,
             code,
             code_verifier: codeVerifier,
+            profile_name: profileName,
           }),
         });
         const exchangeData = await exchangeRes.json();
@@ -387,6 +387,40 @@ function ConnectionTest({
 
 
 // --- Attribution Mapping Editor ---
+
+// --- Google Secret Saver ---
+// Watches client_secret changes and persists to OS keychain via wizard backend.
+// config.json never contains the secret; end-users must run --set-client-secret.
+
+function GoogleSecretSaver({ profileName, clientSecret }: { profileName: string; clientSecret: string }) {
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!clientSecret || !profileName) return;
+    setSaveStatus("saving");
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/secret/keyring", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ profile_name: profileName, secret_name: "client-secret", value: clientSecret }),
+        });
+        setSaveStatus(res.ok ? "saved" : "error");
+      } catch {
+        setSaveStatus("error");
+      }
+    }, 800);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [clientSecret, profileName]);
+
+  if (saveStatus === "idle") return null;
+  if (saveStatus === "saving") return <Alert type="info">Client secret을 OS keychain에 저장 중…</Alert>;
+  if (saveStatus === "saved") return <Alert type="success">Client secret이 이 머신의 OS keychain에 저장되었습니다. 배포받는 사용자는 <Box variant="code" display="inline">credential-process --set-client-secret</Box> 을 별도로 실행해야 합니다.</Alert>;
+  return <Alert type="error">Keychain 저장 실패. OS keyring 서비스를 확인하세요.</Alert>;
+}
+
 
 const DIMENSION_LABELS: Record<string, { label: string; description: string }> = {
   user: { label: "User (사용자 식별)", description: "대시보드에서 개별 사용자를 식별하는 키" },
