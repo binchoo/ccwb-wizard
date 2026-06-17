@@ -194,6 +194,25 @@ def _inject_lambda_code(template_content: str) -> str:
     return template_content
 
 
+def _failed_resource_ids(cfn, stack_name: str) -> list[str]:
+    """Logical IDs of resources currently in a *_FAILED state.
+
+    Used as ResourcesToSkip for continue-update-rollback when a rollback is wedged
+    by resources that were deleted out-of-band (drift → NotFound on update).
+    """
+    ids: list[str] = []
+    try:
+        resp = cfn.describe_stack_resources(StackName=stack_name)
+    except ClientError:
+        return ids
+    for r in resp.get("StackResources", []):
+        if r.get("ResourceStatus", "").endswith("_FAILED"):
+            lid = r.get("LogicalResourceId")
+            if lid and lid not in ids:
+                ids.append(lid)
+    return ids
+
+
 def _stack_status(cfn, stack_name: str) -> str | None:
     """Return the current StackStatus, or None if the stack does not exist."""
     try:
@@ -275,12 +294,18 @@ def _deploy_stack(cfn, stack_name: str, template_body: str,
         return _create()
 
     # A previous update rolled back but the rollback itself failed. First resume
-    # the rollback (skipping failed resources) to reach UPDATE_ROLLBACK_COMPLETE,
-    # then delete + re-create for a clean stack — re-updating tends to re-hit the
-    # same resource failure that caused the rollback.
+    # the rollback (skipping resources wedged by drift, e.g. deleted out-of-band)
+    # to reach UPDATE_ROLLBACK_COMPLETE, then delete + re-create for a clean stack.
     if status == "UPDATE_ROLLBACK_FAILED":
-        cfn.continue_update_rollback(StackName=stack_name)
-        _wait_for_stack(cfn, stack_name)
+        skip = _failed_resource_ids(cfn, stack_name)
+        try:
+            if skip:
+                cfn.continue_update_rollback(StackName=stack_name, ResourcesToSkip=skip)
+            else:
+                cfn.continue_update_rollback(StackName=stack_name)
+            _wait_for_stack(cfn, stack_name)
+        except ClientError:
+            pass  # fall through to delete + recreate regardless
         cfn.delete_stack(StackName=stack_name)
         _wait_for_delete(cfn, stack_name)
         return _create()

@@ -119,6 +119,14 @@ def _generate_config_json(config: Config) -> dict:
         profile_config["oidc_authorization_endpoint"] = provider.get("authorization_endpoint", "")
         profile_config["oidc_token_endpoint"] = provider.get("token_endpoint", "")
 
+    # Confidential clients (e.g. Google "Web application") require client_secret at
+    # the token endpoint even with PKCE. Ship it so credential-process can complete
+    # the exchange. NOTE: this writes the secret into the distributed config.json in
+    # plaintext — acceptable for Google web-app clients (treated as non-confidential
+    # in the installed-app flow), but avoid for IdPs that enforce true confidentiality.
+    if provider.get("client_secret"):
+        profile_config["client_secret"] = provider["client_secret"]
+
     # Attribution mapping (dynamic binding)
     if config.attribution:
         profile_config["attribution"] = config.attribution
