@@ -81,7 +81,53 @@ PROVIDER_CONFIGS = {
         "response_type": "code",
         "response_mode": "query",
     },
+    # Google: authorize and token live on different hosts, so (like generic) the
+    # absolute URLs are supplied via the profile (oidc_authorization_endpoint /
+    # oidc_token_endpoint). Placeholders left empty here.
+    "google": {
+        "name": "Google",
+        "authorize_endpoint": "",
+        "token_endpoint": "",
+        "scopes": "openid email profile",
+        "response_type": "code",
+        "response_mode": "query",
+    },
 }
+
+
+def _assert_secure_keyring_backend() -> None:
+    """Raise unless the active keyring backend is a recognized OS secure store.
+
+    Client-secret auth (Azure/Google confidential clients) must never fall back to an
+    insecure keyring backend — e.g. keyrings.alt plaintext/encrypted-file storage or
+    the no-op fail backend. Those would store/expose the secret on disk and defeat the
+    whole point of keeping it out of the package. Hard-fail with guidance instead.
+    """
+    try:
+        kr = keyring.get_keyring()
+    except Exception as e:
+        raise RuntimeError(f"No keyring backend available for client-secret auth: {e}") from e
+
+    # A priority/chainer backend wraps an ordered list of backends; inspect members.
+    candidates = list(getattr(kr, "backends", []) or [kr])
+
+    def _is_secure(backend) -> bool:
+        module = (type(backend).__module__ or "").lower()
+        return module.startswith((
+            "keyring.backends.macos",        # macOS Keychain
+            "keyring.backends.windows",      # Windows Credential Manager
+            "keyring.backends.secretservice",  # freedesktop Secret Service
+            "keyring.backends.kwallet",      # KDE KWallet
+        ))
+
+    if not any(_is_secure(b) for b in candidates):
+        active = f"{type(kr).__module__}.{type(kr).__name__}"
+        raise RuntimeError(
+            f"Insecure keyring backend '{active}'. Client-secret auth requires an OS "
+            "secure store (macOS Keychain, Windows Credential Manager, Secret Service, "
+            "or KWallet). A plaintext fallback would expose the secret. Enable a secure "
+            "keyring backend and retry."
+        )
 
 
 class MultiProviderAuth:
@@ -258,9 +304,14 @@ class MultiProviderAuth:
             "max_session_duration", 43200 if profile_config.get("federation_type") == "direct" else 28800
         )
 
-        # Load client secret from OS keyring if configured for secret-based confidential client.
-        # The secret is never written to config.json; it lives only in the keyring.
-        if profile_config.get("azure_auth_mode") == "secret":
+        # Load client secret from OS keyring for secret-based confidential clients.
+        # Covers Azure (azure_auth_mode) and Google (auth_mode); both store the secret
+        # under "{profile}-client-secret". The secret is never written to config.json;
+        # it lives only in the OS keyring. Refuse to proceed on an insecure keyring
+        # backend so the secret can never land in a plaintext fallback store.
+        auth_mode = profile_config.get("auth_mode") or profile_config.get("azure_auth_mode")
+        if auth_mode == "secret":
+            _assert_secure_keyring_backend()
             try:
                 secret = keyring.get_password("claude-code-with-bedrock", f"{self.profile}-client-secret")
                 if secret:
@@ -309,6 +360,13 @@ class MultiProviderAuth:
             profile_config["provider_domain"] = provider.get("issuer_url", "")
             profile_config["oidc_authorization_endpoint"] = provider.get("authorization_endpoint", "")
             profile_config["oidc_token_endpoint"] = provider.get("token_endpoint", "")
+        elif ptype == "google":
+            # Fixed Google OIDC endpoints (authorize/token on different hosts → absolute URLs).
+            profile_config["provider_domain"] = "accounts.google.com"
+            profile_config["oidc_authorization_endpoint"] = "https://accounts.google.com/o/oauth2/v2/auth"
+            profile_config["oidc_token_endpoint"] = "https://oauth2.googleapis.com/token"
+            # Desktop client: secret required at token exchange, loaded from keyring.
+            profile_config["auth_mode"] = provider.get("auth_mode", "secret")
 
         # Pass through attribution config (consumed by _refresh_magic_header)
         profile_config["attribution"] = file_config.get("attribution", {})
@@ -2316,6 +2374,8 @@ def main():
                     pass  # Secret already absent, nothing to clear
                 print(f"✓ Client secret cleared for profile '{args.profile}'", file=sys.stderr)
             else:
+                # Refuse to write the secret to an insecure (plaintext/file) keyring backend.
+                _assert_secure_keyring_backend()
                 keyring.set_password("claude-code-with-bedrock", f"{args.profile}-client-secret", secret)
                 print(f"✓ Client secret stored in OS secure storage for profile '{args.profile}'", file=sys.stderr)
         except Exception as e:

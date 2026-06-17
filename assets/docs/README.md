@@ -15,6 +15,7 @@ Choose your IdP and follow the setup guide before running `ccwb init`:
 | **Okta** | [okta-setup.md](./providers/okta-setup.md) |
 | **Microsoft Entra ID (Azure AD)** | [microsoft-entra-id-setup.md](./providers/microsoft-entra-id-setup.md) |
 | **Auth0** | [auth0-setup.md](./providers/auth0-setup.md) |
+| **Google** | [google-setup.md](./providers/google-setup.md) |
 | **AWS Cognito User Pool** | [cognito-user-pool-setup.md](./providers/cognito-user-pool-setup.md) |
 | **AWS IAM Identity Center (SSO)** | [iam-identity-center-setup.md](./providers/iam-identity-center-setup.md) |
 
@@ -50,6 +51,12 @@ Once you have your IdP **provider domain** and **client ID**, follow one of thes
 - **File**: [QUOTA_MONITORING.md](./QUOTA_MONITORING.md)
 - **Purpose**: Per-user and per-group token quota enforcement and alerts
 - **Audience**: IT administrators managing usage costs
+
+### Quota Enforcement Model & Tuning
+
+- **File**: [QUOTA_ENFORCEMENT.md](./QUOTA_ENFORCEMENT.md)
+- **Purpose**: What enforcement this stack can/cannot provide (not an inline proxy), and how to tune strictness via token lifetime
+- **Audience**: Operators and architects deciding quota strictness
 
 ### Cost Attribution
 

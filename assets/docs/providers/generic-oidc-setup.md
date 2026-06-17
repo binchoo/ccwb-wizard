@@ -57,7 +57,10 @@ Before running `ccwb init`, gather these five values:
 | **Token endpoint** | Full URL the credential helper POSTs to for code exchange. | `https://auth.example.com/as/token.oauth2` |
 | **JWKS URI** | Public JWKS endpoint that AWS IAM uses to validate ID tokens. | `https://auth.example.com/pf/JWKS` |
 
-You also need the **SHA-1 thumbprint** of the JWKS endpoint's TLS leaf certificate. `ccwb init` computes this automatically via TLS handshake — the manual command is in the [Troubleshooting](#7-troubleshooting) section if auto-computation fails.
+You do **not** need the JWKS endpoint's TLS certificate thumbprint. AWS IAM secures
+communication with OIDC IdPs whose certificates chain to a trusted CA without using a
+thumbprint, and for the rare private/self-signed CA case IAM retrieves it from the IdP
+endpoint automatically at provider-creation time. (See the [2024-07 IAM change](https://aws.amazon.com/about-aws/whats-new/2024/07/aws-identity-access-management-open-id-connect-identity-providers).)
 
 > **Tip:** Most of these come straight from `{issuer}/.well-known/openid-configuration`. `ccwb init` queries that automatically and pre-fills the prompts.
 
@@ -75,8 +78,7 @@ When the wizard asks "Select your identity provider type", choose **Generic OIDC
 
 1. Prompt for the issuer URL.
 2. Query `{issuer}/.well-known/openid-configuration`. If discovery succeeds, the next three prompts (authorization endpoint, token endpoint, JWKS URI) are pre-filled — confirm or override.
-3. Open a TLS connection to your JWKS endpoint to compute the leaf-cert SHA-1 thumbprint. The next prompt is pre-filled — confirm or override.
-4. Continue with federation type, region, model selection, etc.
+3. Continue with federation type, region, model selection, etc.
 
 The resulting profile is saved to `~/.ccwb/profiles/<name>.json` with these new fields:
 
@@ -86,8 +88,7 @@ The resulting profile is saved to `~/.ccwb/profiles/<name>.json` with these new 
   "oidc_issuer_url": "https://auth.example.com",
   "oidc_authorization_endpoint": "https://auth.example.com/as/authorization.oauth2",
   "oidc_token_endpoint": "https://auth.example.com/as/token.oauth2",
-  "oidc_jwks_uri": "https://auth.example.com/pf/JWKS",
-  "oidc_thumbprint": "9e99a48a9960b14926bb7f3b02e22da2b0ab7280"
+  "oidc_jwks_uri": "https://auth.example.com/pf/JWKS"
 }
 ```
 
@@ -97,7 +98,7 @@ Then deploy:
 poetry run ccwb deploy auth
 ```
 
-This applies `deployment/infrastructure/bedrock-auth-generic.yaml`, which provisions the IAM OIDC Provider with your issuer URL and thumbprint, plus the federated role and Bedrock policy.
+This applies `deployment/infrastructure/bedrock-auth-generic.yaml`, which provisions the IAM OIDC Provider with your issuer URL (IAM handles the certificate thumbprint automatically), plus the federated role and Bedrock policy.
 
 ---
 
@@ -160,17 +161,6 @@ Keycloak's URL layout is realm-scoped:
 
 Your IdP doesn't publish a discovery document. The wizard falls through to manual entry — populate each prompt by hand using your IdP's documentation.
 
-### `TLS handshake to <host>:443 failed`
-
-Auto-thumbprint computation hit a network or TLS error. Compute the SHA-1 manually:
-
-```bash
-echo | openssl s_client -servername <jwks-host> -connect <jwks-host>:443 2>/dev/null \
-  | openssl x509 -fingerprint -sha1 -noout
-```
-
-Strip the colons and lowercase the result before pasting into `ccwb init`.
-
 ### `Token is not from a supported provider` from STS
 
 The `iss` claim in your ID token does not exactly match the issuer URL configured on the IAM OIDC Provider. Common causes:
@@ -188,20 +178,6 @@ The IdP didn't redirect back to `http://localhost:8400/callback`. Check the IdP 
 ### `Invalid nonce in ID token`
 
 The IdP did not echo the `nonce` parameter back in the ID token. This is required by OIDC and most modern IdPs do it correctly — if you hit this, check whether your IdP needs a configuration toggle to include `nonce`.
-
-### Where do I find the JWKS thumbprint manually?
-
-```bash
-HOST=auth.example.com
-echo | openssl s_client -servername "$HOST" -connect "$HOST:443" 2>/dev/null \
-  | openssl x509 -fingerprint -sha1 -noout \
-  | sed 's/.*=//;s/://g' \
-  | tr 'A-Z' 'a-z'
-```
-
-### My IdP rotates the JWKS cert. What do I do?
-
-The IAM OIDC Provider accepts multiple thumbprints. For now, the wizard only collects one — to add a second, edit `~/.ccwb/profiles/<name>.json` and set `oidc_thumbprint` to a comma-separated list, then redeploy with `poetry run ccwb deploy auth`.
 
 ---
 

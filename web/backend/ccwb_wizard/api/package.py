@@ -120,6 +120,14 @@ def _generate_config_json(config: Config) -> dict:
         profile_config["provider_domain"] = provider.get("issuer_url", "")
         profile_config["oidc_authorization_endpoint"] = provider.get("authorization_endpoint", "")
         profile_config["oidc_token_endpoint"] = provider.get("token_endpoint", "")
+    elif ptype == "google":
+        # Fixed Google OIDC endpoints (authorize/token on different hosts → absolute URLs).
+        # auth_mode=secret → credential-process loads the Desktop-client secret from the
+        # OS keyring at token exchange. The secret is NEVER written to this config.json.
+        profile_config["provider_domain"] = "accounts.google.com"
+        profile_config["oidc_authorization_endpoint"] = "https://accounts.google.com/o/oauth2/v2/auth"
+        profile_config["oidc_token_endpoint"] = "https://oauth2.googleapis.com/token"
+        profile_config["auth_mode"] = "secret"
 
     # Attribution mapping (dynamic binding)
     if config.attribution:

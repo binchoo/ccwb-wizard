@@ -19,6 +19,7 @@ const PROVIDER_OPTIONS: SelectProps.Option[] = [
   { value: "cognito", label: "AWS Cognito User Pool" },
   { value: "auth0", label: "Auth0" },
   { value: "generic", label: "Generic OIDC (Keycloak, PingFederate, etc.)" },
+  { value: "google", label: "Google" },
 ];
 
 interface CognitoPool {
@@ -182,6 +183,19 @@ export default function ProviderPage() {
               />
             </FormField>
           )) : null}
+
+          {/* Google: client secret is never entered here — it is injected per-machine
+              into the OS keyring. PKCE is the real defense; the secret is non-confidential. */}
+          {providerType === "google" && (
+            <Alert type="info" data-testid="google-secret-notice" header="Client secret은 위저드에 입력하지 않습니다">
+              Google "Desktop app" 클라이언트는 토큰 교환에 client secret이 필요하지만, 보안상 패키지에 담지 않습니다.
+              각 사용자 머신에서 OS 보안 저장소(keyring)에 직접 주입하세요:
+              <Box variant="code" margin={{ top: "xs" }}>
+                credential-process --set-client-secret --profile {(draft.profile_name as string) || "ClaudeCode"}
+              </Box>
+              실제 방어선은 PKCE이며 이 secret은 기밀로 취급되지 않습니다. 자세한 내용은 google-setup.md를 참고하세요.
+            </Alert>
+          )}
 
           {/* IdP Connection Test */}
           {providerType && draft.provider?.client_id && (

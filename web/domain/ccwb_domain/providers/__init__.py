@@ -30,7 +30,7 @@ def provider_strategy(provider_dict: dict) -> IdentityProvider:
 
 
 # Import submodules to trigger @register
-from . import okta, azure, cognito, auth0, generic  # noqa: E402, F401
+from . import okta, azure, cognito, auth0, generic, google  # noqa: E402, F401
 
 __all__ = [
     "PROVIDERS",

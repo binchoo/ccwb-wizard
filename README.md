@@ -207,10 +207,16 @@ Restart Claude Code afterward.
 
 ## Documentation
 
+All user and operator guides live under [`assets/docs/`](assets/docs/README.md) — start
+there for the full index. Key entry points:
+
 | Doc | What it covers |
 |-----|----------------|
 | [QUICK_START.md](QUICK_START.md) | Full CLI deployment walkthrough |
 | [web/README.md](web/README.md) | Web wizard architecture, dev setup, step-by-step flow |
+| [assets/docs/README.md](assets/docs/README.md) | Full user & operator guide index (IdP setup, deployment, monitoring, quotas, cost) |
+| [assets/docs/QUOTA_MONITORING.md](assets/docs/QUOTA_MONITORING.md) | Quota policies, alerts, and `ccwb quota` CLI |
+| [assets/docs/QUOTA_ENFORCEMENT.md](assets/docs/QUOTA_ENFORCEMENT.md) | Quota enforcement model, limits, and token-lifetime tuning |
 | [ANTHROPIC_CUSTOM_HEADERS_GUIDE.md](ANTHROPIC_CUSTOM_HEADERS_GUIDE.md) | Magic-header / attribution contract |
 | [USER_LIFECYCLE_RUNBOOK.md](web/binaries/credential_provider/USER_LIFECYCLE_RUNBOOK.md) | Operator runbook for member lifecycle |
 | [MIGRATION.md](MIGRATION.md) | Migration notes |
