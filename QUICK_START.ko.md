@@ -61,8 +61,8 @@ AWS 계정에는 CloudFormation, IAM(OIDC Provider/역할), Bedrock model-invoca
 ### 2단계 — 코드 받기 + 빌드
 
 ```bash
-git clone <repository-url>
-cd ccwb
+git clone https://github.com/binchoo/ccwb-wizard
+cd ccwb-wizard
 
 uv sync --all-packages    # Python 워크스페이스 의존성 설치
 make build                # 프론트엔드 빌드 → 백엔드 static에 복사

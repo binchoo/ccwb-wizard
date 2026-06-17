@@ -27,9 +27,9 @@ Before moving on, note two critical values from your application configuration: 
 With your identity provider configured, it's time to deploy the AWS infrastructure that bridges your organization's authentication to Amazon Bedrock. Start by cloning the repository and installing the deployment tools:
 
 ```bash
-git clone https://github.com/aws-solutions-library-samples/guidance-for-claude-code-with-amazon-bedrock
-cd guidance-for-claude-code-with-amazon-bedrock/source
-poetry install
+git clone https://github.com/binchoo/ccwb-wizard
+cd ccwb-wizard
+uv sync --all-packages
 ```
 
 The `ccwb` (Claude Code with Bedrock) CLI tool guides you through deployment with an interactive wizard. Run `poetry run ccwb init` to begin. The wizard walks you through each configuration decision, starting with your OIDC provider details - enter the domain and Client ID you noted earlier.

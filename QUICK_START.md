@@ -94,8 +94,8 @@ Claude Code uses Bedrock cross-region inference. In the wizard you select a Clau
 
 ```bash
 # Clone the repository
-git clone <repository-url>
-cd ccwb
+git clone https://github.com/binchoo/ccwb-wizard
+cd ccwb-wizard
 
 # Install all Python workspace deps (domain + backend)
 uv sync --all-packages

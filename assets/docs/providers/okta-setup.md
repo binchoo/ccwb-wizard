@@ -364,8 +364,8 @@ Once you've completed this Okta setup:
 
 1. Clone the repository and build the wizard:
    ```bash
-   git clone <repository-url>
-   cd ccwb
+   git clone https://github.com/binchoo/ccwb-wizard
+   cd ccwb-wizard
    uv sync --all-packages
    make build
    ```

@@ -22,8 +22,8 @@ The CloudFormation template creates a Cognito User Pool with:
 
 ```bash
 # Clone the repository
-git clone <repository-url>
-cd claude-code-auth-setup
+git clone https://github.com/binchoo/ccwb-wizard
+cd ccwb-wizard
 
 # Deploy the User Pool stack
 aws cloudformation deploy \

@@ -53,8 +53,8 @@ The Claude Code with Bedrock CLI (`ccwb`) provides commands for IT administrator
 
 ```bash
 # Clone the repository
-git clone [<repository-url>](https://github.com/aws-solutions-library-samples/guidance-for-claude-code-with-amazon-bedrock.git)
-cd guidance-for-claude-code-with-amazon-bedrock/source
+git clone https://github.com/binchoo/ccwb-wizard
+cd ccwb-wizard
 
 # Install dependencies
 poetry install

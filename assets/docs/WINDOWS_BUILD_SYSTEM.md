@@ -116,8 +116,8 @@ sequenceDiagram
 ### 1. Clone Repository
 
 ```bash
-git clone <repository-url>
-cd guidance-for-claude-code-with-amazon-bedrock/source
+git clone https://github.com/binchoo/ccwb-wizard
+cd ccwb-wizard
 ```
 
 ### 2. Install Dependencies
