@@ -439,6 +439,14 @@ async def deploy_profile(name: str):
                 if op == "NO_CHANGE":
                     yield _sse({"type": "progress", "stack": stack_plan.stack_name,
                                 "step": i, "total": total, "status": "NO_CHANGE"})
+                    # Even when the stack is unchanged, its outputs must still be synced
+                    # to the profile. A freshly created or re-saved profile can lack
+                    # deploy-owned fields (e.g. provider.federated_role_arn) even though
+                    # the stack already exists. Skipping the sync here is what made the
+                    # packaged config.json ship an empty federated_role_arn.
+                    synced = _sync_outputs_to_profile(cfn, stack_plan.stack_name, path)
+                    if synced:
+                        yield _sse({"type": "sync", "stack": stack_plan.stack_name, "synced": synced})
                     continue
 
                 result = _wait_for_stack(cfn, stack_plan.stack_name)

@@ -80,6 +80,49 @@ def _build_binary(dist_dir: Path, platform_name: str) -> Path:
     return binary_path
 
 
+def _get_cfn_client(region: str, profile: str = ""):
+    """CloudFormation client bound to the operator-selected AWS named profile.
+
+    Empty profile → default credential chain. Keeps package on the SAME account
+    the operator selected on the Environment page.
+    """
+    session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+    return session.client("cloudformation", region_name=region)
+
+
+def _ensure_federated_role_arn(config: Config, path: Path) -> bool:
+    """Backfill provider.federated_role_arn from the deployed auth stack if missing.
+
+    Deploy normally syncs this value into the profile, but that sync can be skipped
+    (stack NO_CHANGE) or wiped by a later profile save from the wizard. CFN is the
+    source of truth, so read it back from the ``{stack_base_name}-auth`` stack.
+
+    Returns True if the profile on disk was updated (caller should reload).
+    """
+    provider = config.provider or {}
+    if provider.get("federated_role_arn"):
+        return False
+    if not config.stack_base_name:
+        return False
+
+    stack_name = f"{config.stack_base_name}-auth"
+    try:
+        cfn = _get_cfn_client(config.aws_region, config.aws_profile)
+        resp = cfn.describe_stacks(StackName=stack_name)
+        outputs = {o["OutputKey"]: o["OutputValue"] for o in resp["Stacks"][0].get("Outputs", [])}
+    except Exception:
+        return False
+
+    arn = outputs.get("FederatedRoleArn") or outputs.get("DirectSTSRoleArn")
+    if not arn:
+        return False
+
+    # Persist through Config.save so the same write also strips any stray secret.
+    config.provider = {**provider, "federated_role_arn": arn}
+    config.save(path)
+    return True
+
+
 def _generate_config_json(config: Config) -> dict:
     """Generate credential-process config.json from Config 3.0 profile.
 
@@ -374,6 +417,10 @@ async def build_package(name: str) -> dict:
     # 2. Write config.json (needs federated_role_arn from deployed auth stack)
     # Reload profile to get synced outputs (e.g. federated_role_arn from deploy)
     config = Config.load(path)
+    # Self-heal: if deploy's output sync was skipped or clobbered, backfill the
+    # federated_role_arn from the auth stack so the package never ships an empty one.
+    if _ensure_federated_role_arn(config, path):
+        config = Config.load(path)
     config_json = _generate_config_json(config)
     (dist_dir / "config.json").write_text(
         json.dumps(config_json, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"

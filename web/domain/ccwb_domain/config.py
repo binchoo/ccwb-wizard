@@ -89,9 +89,19 @@ class Config:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
     def save(self, path: Path) -> None:
-        """Save Config to a JSON file. Creates parent dirs if needed."""
+        """Save Config to a JSON file. Creates parent dirs if needed.
+
+        Raw secrets are never written to disk. A confidential ``client_secret``
+        (Google / Azure desktop clients) lives only in the OS keyring — written
+        separately via the wizard's keyring endpoint and read by credential-process
+        from ``{profile}-client-secret``. The profile JSON must not carry it.
+        """
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {k: getattr(self, k) for k in self.__dataclass_fields__}
+        provider = data.get("provider")
+        if isinstance(provider, dict) and "client_secret" in provider:
+            # Strip from a copy so the in-memory Config is left untouched.
+            data["provider"] = {k: v for k, v in provider.items() if k != "client_secret"}
         path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     def to_dict(self) -> dict[str, Any]:
