@@ -9,7 +9,7 @@ This project is based on the AWS Solutions guidance
 and diverges from it in three significant ways:
 
 1. **Web deployment wizard** — an operator-facing local web app (`uv run ccwb`) drives the
-   whole deploy → package → distribute flow, in addition to the original CLI.
+   whole deploy → package → distribute flow.
 2. **Bedrock-native usage logging** — the OTEL/ECS pipeline is replaced by Amazon Bedrock
    model-invocation logging. Attribution is read straight from each invocation log's
    `$.requestMetadata.*` fields, surfaced in a CloudWatch Logs Insights dashboard.
@@ -67,54 +67,60 @@ End user laptop ─▶ credential-process ─▶ OIDC login ─▶ STS AssumeRol
 
 ---
 
-## Two ways to deploy
-
-### A. Web wizard (this fork's primary path)
-
-```bash
-cd ccwb
-uv sync --all-packages
-cd web/frontend && yarn install && cd ../..
-
-uv run ccwb            # production build + serve, then open the printed localhost URL
-# or: make dev         # hot-reload dev mode (vite + uvicorn)
-```
-
-The wizard walks 11 steps (profile → AWS env → IdP + attribution → infra name → models →
-logging/quota → distribution → features → tags → review → deploy/package/test/distribute).
-See [web/README.md](web/README.md) for the full step list and developer setup.
-
-### B. CLI (upstream-style)
-
-```bash
-cd source
-poetry install
-poetry run ccwb init       # interactive wizard → ~/.ccwb/profiles/<name>.json
-poetry run ccwb deploy     # CloudFormation stacks
-poetry run ccwb package    # build installer(s)
-poetry run ccwb distribute # presigned S3 URL (optional)
-```
-
-See [QUICK_START.md](QUICK_START.md) for the complete CLI walkthrough.
-
----
-
 ## Prerequisites
 
 **Operator (deployment):**
-- Python 3.10–3.13, [uv](https://docs.astral.sh/uv/) (wizard) or Poetry (CLI)
-- Node.js ≥ 18 + yarn (wizard frontend only)
+- Python 3.10–3.12 and [uv](https://docs.astral.sh/uv/)
+- Node.js ≥ 18 + yarn (to build the wizard frontend)
+- `make` (optional — Windows users run the equivalent PowerShell build steps shown below)
 - AWS CLI v2, Git
 - AWS account with permissions for CloudFormation, IAM (OIDC provider / roles), Bedrock
   model-invocation logging, CloudWatch, S3, and optionally Lambda / CodeBuild
 - Amazon Bedrock model access enabled in the target region(s)
 
-**OIDC provider:** an existing provider (Okta, Microsoft Entra ID, Auth0, or Cognito User
-Pool) with an app registration whose redirect URI includes `http://localhost:8400/callback`
-and PKCE enabled. You need the **provider domain** and **client ID**.
+**OIDC provider:** an existing provider (Okta, Microsoft Entra ID, Auth0, Google, or Cognito
+User Pool) with an app registration whose redirect URI includes `http://localhost:8400/callback`
+and PKCE enabled. You need the **provider domain** (or issuer URL) and **client ID**.
 
 **End user:** Claude Code installed and a browser. No AWS account, Python, or Git required —
 they receive a pre-built package and log in with corporate credentials.
+
+---
+
+## Deploying the wizard
+
+The wizard is the single operator path: build the frontend once, then run `uv run ccwb`.
+
+```bash
+git clone https://github.com/binchoo/ccwb-wizard
+cd ccwb-wizard
+
+uv sync --all-packages     # Python workspace (domain + backend)
+make build                 # frontend → web/backend/ccwb_wizard/static
+
+uv run ccwb                # start the wizard, opens the printed localhost URL
+```
+
+`uv run ccwb` serves the **pre-built** frontend — it does not build. Run `make build`
+(or the Windows steps below) first, otherwise the wizard starts with no UI mounted.
+
+**Windows (no `make`)** — run the build steps directly in PowerShell:
+
+```powershell
+cd web/frontend; yarn install; yarn build; cd ../..
+Remove-Item -Recurse -Force web/backend/ccwb_wizard/static -ErrorAction SilentlyContinue
+Copy-Item -Recurse web/frontend/dist web/backend/ccwb_wizard/static
+uv run ccwb
+```
+
+**Developer hot-reload** (only when changing the wizard itself) — `make dev` runs Vite
+(`:5173`) and uvicorn (`:8400`) with reload. On Windows, run the two in separate terminals:
+`cd web/frontend; yarn dev` and `uv run uvicorn ccwb_wizard.main:app --host 127.0.0.1 --port 8400 --reload`.
+
+The wizard walks 11 pages (profile → AWS env → IdP + attribution → infra name → models →
+logging/quota → distribution → features → tags → review → deploy/package/test/distribute).
+See [QUICK_START.md](QUICK_START.md) for the full walkthrough and [web/README.md](web/README.md)
+for wizard internals and developer setup.
 
 ---
 
@@ -212,13 +218,13 @@ there for the full index. Key entry points:
 
 | Doc | What it covers |
 |-----|----------------|
-| [QUICK_START.md](QUICK_START.md) | Full CLI deployment walkthrough |
+| [QUICK_START.md](QUICK_START.md) | Full web-wizard deployment walkthrough (operator + end user) |
 | [QUICK_START.ko.md](QUICK_START.ko.md) | 한국어 빠른 시작 (IT 어드민·엔드 유저 액션 순서) |
 | [web/README.md](web/README.md) | Web wizard architecture, dev setup, step-by-step flow |
 | [assets/docs/README.md](assets/docs/README.md) | Full user & operator guide index (IdP setup, deployment, monitoring, quotas, cost) |
-| [assets/docs/QUOTA_MONITORING.md](assets/docs/QUOTA_MONITORING.md) | Quota policies, alerts, and `ccwb quota` CLI |
+| [assets/docs/QUOTA_MONITORING.md](assets/docs/QUOTA_MONITORING.md) | Quota policies, alerts, and quota configuration |
 | [assets/docs/QUOTA_ENFORCEMENT.md](assets/docs/QUOTA_ENFORCEMENT.md) | Quota enforcement model, limits, and token-lifetime tuning |
-| [ANTHROPIC_CUSTOM_HEADERS_GUIDE.md](assets/docs/ANTHROPIC_CUSTOM_HEADERS_GUIDE.md) | Magic-header / attribution contract |
+| [assets/docs/ANTHROPIC_CUSTOM_HEADERS_GUIDE.md](assets/docs/ANTHROPIC_CUSTOM_HEADERS_GUIDE.md) | Magic-header / attribution contract |
 | [USER_LIFECYCLE_RUNBOOK.md](web/binaries/credential_provider/USER_LIFECYCLE_RUNBOOK.md) | Operator runbook for member lifecycle |
 
 ---
