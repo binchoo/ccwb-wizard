@@ -30,6 +30,9 @@ export default function EnvironmentPage() {
         }));
         opts.unshift({ value: "", label: "(기본 — 환경변수/default profile)", description: "" });
         setProfiles(opts);
+        // Restore previously selected profile (edit/clone or revisiting the page)
+        const saved = opts.find((o) => o.value === (draft.aws_profile || ""));
+        if (saved) setSelectedProfile(saved);
       })
       .catch(() => setProfiles([{ value: "", label: "(기본)", description: "" }]));
 
@@ -78,6 +81,7 @@ export default function EnvironmentPage() {
               selectedOption={selectedProfile}
               onChange={({ detail }) => {
                 setSelectedProfile(detail.selectedOption);
+                updateDraft({ aws_profile: detail.selectedOption.value || "" });
                 setStatus("idle");
               }}
               options={profiles}

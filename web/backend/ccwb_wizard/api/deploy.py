@@ -31,9 +31,21 @@ router = APIRouter(tags=["deploy"])
 CFN_ROOT = Path(__file__).resolve().parents[4] / "deployment" / "infrastructure"
 
 
-def _get_cfn_client(region: str):
-    """Get CloudFormation client for the given region."""
-    return boto3.client("cloudformation", region_name=region)
+def _get_session(profile: str = ""):
+    """Build a boto3 Session for the operator-selected AWS named profile.
+
+    Empty profile → default credential chain (env vars / default profile).
+    This ensures deploy targets the SAME account chosen on the Environment page,
+    rather than silently falling back to ambient default credentials.
+    """
+    if profile:
+        return boto3.Session(profile_name=profile)
+    return boto3.Session()
+
+
+def _get_cfn_client(region: str, profile: str = ""):
+    """Get CloudFormation client for the given region and selected profile."""
+    return _get_session(profile).client("cloudformation", region_name=region)
 
 
 def _read_template(template_path: Path) -> str:
@@ -59,10 +71,13 @@ def _read_template(template_path: Path) -> str:
     return content
 
 
-def _package_template(template_path: Path, s3_bucket: str, region: str) -> str:
+def _package_template(template_path: Path, s3_bucket: str, region: str, profile: str = "") -> str:
     """Run `aws cloudformation package` for templates with relative Code paths.
     
     Uploads Lambda code to S3 and returns the packaged template body with S3 URIs.
+    The selected AWS profile is forwarded to the CLI subprocess so the upload
+    authenticates against the SAME account chosen on the Environment page
+    (otherwise the CLI falls back to ambient default credentials → AccessDenied).
     """
     import subprocess
     import tempfile
@@ -82,6 +97,8 @@ def _package_template(template_path: Path, s3_bucket: str, region: str) -> str:
         "--output-template-file", tmp_output,
         "--region", region,
     ]
+    if profile:
+        cmd += ["--profile", profile]
     
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120, cwd=str(CFN_ROOT))
     if result.returncode != 0:
@@ -177,40 +194,64 @@ def _inject_lambda_code(template_content: str) -> str:
     return template_content
 
 
-def _stack_exists(cfn, stack_name: str) -> bool:
-    """Check if a stack exists (any state except DELETE_COMPLETE)."""
+def _stack_status(cfn, stack_name: str) -> str | None:
+    """Return the current StackStatus, or None if the stack does not exist."""
     try:
         resp = cfn.describe_stacks(StackName=stack_name)
-        status = resp["Stacks"][0]["StackStatus"]
-        return status != "DELETE_COMPLETE"
+        return resp["Stacks"][0]["StackStatus"]
     except ClientError as e:
         if "does not exist" in str(e):
-            return False
+            return None
         raise
+
+
+def _stack_exists(cfn, stack_name: str) -> bool:
+    """Check if a stack exists (any state except DELETE_COMPLETE)."""
+    status = _stack_status(cfn, stack_name)
+    return status is not None and status != "DELETE_COMPLETE"
+
+
+def _wait_for_delete(cfn, stack_name: str, timeout: int = 600) -> None:
+    """Block until the stack is fully deleted (or raise on DELETE_FAILED/timeout)."""
+    start = time.time()
+    while time.time() - start < timeout:
+        status = _stack_status(cfn, stack_name)
+        if status is None or status == "DELETE_COMPLETE":
+            return
+        if status == "DELETE_FAILED":
+            raise RuntimeError(
+                f"{stack_name} could not be deleted (DELETE_FAILED). "
+                "A resource (often a non-empty S3 bucket) is blocking deletion. "
+                "Empty/remove it, then retry."
+            )
+        time.sleep(5)
+    raise RuntimeError(f"{stack_name}: timed out waiting for delete after {timeout}s")
+
+
+# Stack states that cannot be updated and must be deleted before re-creating.
+# (A freshly rolled-back create, a failed create, or a failed delete.)
+_RECREATE_STATES = {
+    "ROLLBACK_COMPLETE",
+    "ROLLBACK_FAILED",
+    "CREATE_FAILED",
+    "DELETE_FAILED",
+}
 
 
 def _deploy_stack(cfn, stack_name: str, template_body: str,
                   parameters: dict[str, str], capabilities: list[str],
                   tags: dict[str, str]) -> str:
-    """Create or update a single CFN stack. Returns the operation type."""
+    """Create or update a single CFN stack. Returns the operation type.
+
+    Self-heals stacks stuck in un-updatable states left by previous failed
+    attempts: ROLLBACK_COMPLETE / CREATE_FAILED / ROLLBACK_FAILED / DELETE_FAILED
+    are deleted and re-created; UPDATE_ROLLBACK_FAILED is recovered via
+    continue-update-rollback before updating.
+    """
     cfn_params = [{"ParameterKey": k, "ParameterValue": v} for k, v in parameters.items()]
     cfn_tags = [{"Key": k, "Value": v} for k, v in tags.items()]
 
-    if _stack_exists(cfn, stack_name):
-        try:
-            cfn.update_stack(
-                StackName=stack_name,
-                TemplateBody=template_body,
-                Parameters=cfn_params,
-                Capabilities=capabilities,
-                Tags=cfn_tags,
-            )
-            return "UPDATE"
-        except ClientError as e:
-            if "No updates are to be performed" in str(e):
-                return "NO_CHANGE"
-            raise
-    else:
+    def _create() -> str:
         cfn.create_stack(
             StackName=stack_name,
             TemplateBody=template_body,
@@ -221,6 +262,75 @@ def _deploy_stack(cfn, stack_name: str, template_body: str,
         )
         return "CREATE"
 
+    status = _stack_status(cfn, stack_name)
+
+    # Not present (or fully deleted) → create fresh.
+    if status is None or status == "DELETE_COMPLETE":
+        return _create()
+
+    # Stuck in an un-updatable terminal state → delete then re-create.
+    if status in _RECREATE_STATES:
+        cfn.delete_stack(StackName=stack_name)
+        _wait_for_delete(cfn, stack_name)
+        return _create()
+
+    # A previous update rolled back but the rollback itself failed. First resume
+    # the rollback (skipping failed resources) to reach UPDATE_ROLLBACK_COMPLETE,
+    # then delete + re-create for a clean stack — re-updating tends to re-hit the
+    # same resource failure that caused the rollback.
+    if status == "UPDATE_ROLLBACK_FAILED":
+        cfn.continue_update_rollback(StackName=stack_name)
+        _wait_for_stack(cfn, stack_name)
+        cfn.delete_stack(StackName=stack_name)
+        _wait_for_delete(cfn, stack_name)
+        return _create()
+
+    # If an operation is still in flight, let it settle before deciding.
+    elif status.endswith("_IN_PROGRESS"):
+        _wait_for_stack(cfn, stack_name)
+        settled = _stack_status(cfn, stack_name)
+        if settled is None or settled == "DELETE_COMPLETE":
+            return _create()
+        if settled in _RECREATE_STATES:
+            cfn.delete_stack(StackName=stack_name)
+            _wait_for_delete(cfn, stack_name)
+            return _create()
+
+    # Normal path: an updatable, complete stack.
+    try:
+        cfn.update_stack(
+            StackName=stack_name,
+            TemplateBody=template_body,
+            Parameters=cfn_params,
+            Capabilities=capabilities,
+            Tags=cfn_tags,
+        )
+        return "UPDATE"
+    except ClientError as e:
+        if "No updates are to be performed" in str(e):
+            return "NO_CHANGE"
+        raise
+
+
+def _first_failure_reason(cfn, stack_name: str) -> str:
+    """Pull the first resource-level failure reason from stack events.
+
+    A rolled-back stack's top-level StackStatusReason is often empty; the actionable
+    cause lives in the per-resource *_FAILED events (e.g. 'already exists').
+    """
+    try:
+        resp = cfn.describe_stack_events(StackName=stack_name)
+    except ClientError:
+        return ""
+    # Events are newest-first; the earliest failure is the root cause, so scan
+    # from the oldest and return the first resource failure reason we find.
+    for ev in reversed(resp.get("StackEvents", [])):
+        status = ev.get("ResourceStatus", "")
+        reason = ev.get("ResourceStatusReason", "") or ""
+        if status.endswith("_FAILED") and reason and "cancelled" not in reason.lower():
+            return f"{ev.get('LogicalResourceId', '?')}: {reason}"
+    return ""
+
 
 def _wait_for_stack(cfn, stack_name: str, timeout: int = 600) -> dict:
     """Poll stack until terminal state. Returns final status dict."""
@@ -230,8 +340,11 @@ def _wait_for_stack(cfn, stack_name: str, timeout: int = 600) -> dict:
         stack = resp["Stacks"][0]
         status = stack["StackStatus"]
         if status.endswith("_COMPLETE") or status.endswith("_FAILED"):
-            return {"stack_name": stack_name, "status": status,
-                    "reason": stack.get("StackStatusReason", "")}
+            reason = stack.get("StackStatusReason", "")
+            # For rollbacks/failures, surface the underlying resource failure.
+            if ("FAILED" in status or "ROLLBACK" in status) and not reason:
+                reason = _first_failure_reason(cfn, stack_name)
+            return {"stack_name": stack_name, "status": status, "reason": reason}
         time.sleep(5)
     return {"stack_name": stack_name, "status": "TIMEOUT",
             "reason": f"Exceeded {timeout}s"}
@@ -249,7 +362,7 @@ async def deploy_profile(name: str):
 
     async def event_stream():
         try:
-            cfn = _get_cfn_client(config.aws_region)
+            cfn = _get_cfn_client(config.aws_region, config.aws_profile)
         except NoCredentialsError:
             yield _sse({"type": "error", "message": "AWS credentials not configured"})
             return
@@ -261,7 +374,7 @@ async def deploy_profile(name: str):
         existing_log_group = ""
         if config.bedrock_logging.get("skip_if_exists"):
             try:
-                bedrock = boto3.client("bedrock", region_name=config.aws_region)
+                bedrock = _get_session(config.aws_profile).client("bedrock", region_name=config.aws_region)
                 resp = bedrock.get_model_invocation_logging_configuration()
                 cw = (resp.get("loggingConfig") or {}).get("cloudWatchConfig") or {}
                 existing_log_group = cw.get("logGroupName", "")
@@ -315,7 +428,7 @@ async def deploy_profile(name: str):
                             f"{stack_plan.stack_name} requires S3 bucket for Lambda packaging, "
                             "but S3 artifacts stack has not been deployed yet."
                         )
-                    template_body = _package_template(stack_plan.template_path, s3_bucket, config.aws_region)
+                    template_body = _package_template(stack_plan.template_path, s3_bucket, config.aws_region, config.aws_profile)
                 else:
                     template_body = _read_template(stack_plan.template_path)
                 
@@ -331,7 +444,7 @@ async def deploy_profile(name: str):
                 yield _sse({"type": "progress", "stack": stack_plan.stack_name,
                             "step": i, "total": total, **result})
 
-                if "FAILED" in result["status"] or result["status"] == "TIMEOUT":
+                if "FAILED" in result["status"] or "ROLLBACK" in result["status"] or result["status"] == "TIMEOUT":
                     yield _sse({"type": "error",
                                 "message": f"{stack_plan.stack_name}: {result['status']} — {result['reason']}"})
                     return
@@ -549,7 +662,7 @@ async def deploy_status(name: str) -> list[dict]:
     artifacts = materialize(config)
 
     try:
-        cfn = _get_cfn_client(config.aws_region)
+        cfn = _get_cfn_client(config.aws_region, config.aws_profile)
     except NoCredentialsError:
         raise HTTPException(status_code=503, detail="AWS credentials not configured")
 

@@ -29,12 +29,9 @@ class GenericProvider(IdentityProvider):
 
     def cfn_parameters(self, config: Any) -> dict[str, str]:
         return {
-            "IssuerUrl": self.issuer_url,
-            "ClientId": self.client_id,
-            "Thumbprint": self.thumbprint,
-            "AuthorizationEndpoint": self.authorization_endpoint,
-            "TokenEndpoint": self.token_endpoint,
-            "JwksUri": self.jwks_uri,
+            "OidcIssuerUrl": self.issuer_url.rstrip("/"),
+            "OidcClientId": self.client_id,
+            "OidcThumbprintList": self.thumbprint,
             "IdentityPoolName": config.stack_base_name,
             "AllowedBedrockRegions": ",".join(_allowed_regions(config)),
             "EnableMonitoring": "true",
@@ -70,3 +67,6 @@ class GenericProvider(IdentityProvider):
             token_endpoint=data.get("token_endpoint", ""),
             jwks_uri=data.get("jwks_uri", ""),
         )
+
+    def oidc_issuer_url(self, config: Any) -> str:
+        return self.issuer_url.rstrip("/")

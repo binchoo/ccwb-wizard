@@ -26,6 +26,12 @@ class Config:
     aws_region: str = ""
     stack_base_name: str = ""
 
+    # Page 1 — AWS deployment credentials (named profile from ~/.aws/config).
+    # Empty string = default credential chain (env vars / default profile).
+    # deploy/package/distribute build their boto3 session from this so the
+    # wizard targets the SAME account the operator selected on the Environment page.
+    aws_profile: str = ""
+
     # Page 2 — Identity Provider (polymorphic dict, dispatched by "type" key)
     provider: dict[str, Any] = field(default_factory=dict)
 

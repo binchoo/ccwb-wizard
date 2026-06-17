@@ -21,9 +21,20 @@ router = APIRouter(tags=["distribute"])
 DIST_BASE = Path(__file__).resolve().parents[4] / "dist"
 
 
-def _get_distribution_bucket(region: str, stack_base_name: str) -> str:
+def _get_session(profile: str = ""):
+    """Build a boto3 Session for the operator-selected AWS named profile.
+
+    Empty profile → default credential chain. Keeps distribute on the SAME
+    account the operator selected on the Environment page.
+    """
+    if profile:
+        return boto3.Session(profile_name=profile)
+    return boto3.Session()
+
+
+def _get_distribution_bucket(region: str, stack_base_name: str, profile: str = "") -> str:
     """Get distribution bucket name from CFN stack output."""
-    cfn = boto3.client("cloudformation", region_name=region)
+    cfn = _get_session(profile).client("cloudformation", region_name=region)
     stack_name = f"{stack_base_name}-distribution"
     try:
         resp = cfn.describe_stacks(StackName=stack_name)
@@ -80,14 +91,14 @@ async def distribute_package(name: str, expiry_hours: int = 48, artifact: str = 
 
     # Get distribution bucket
     try:
-        bucket = _get_distribution_bucket(config.aws_region, config.stack_base_name)
+        bucket = _get_distribution_bucket(config.aws_region, config.stack_base_name, config.aws_profile)
     except (ValueError, NoCredentialsError) as e:
         raise HTTPException(status_code=503, detail=str(e))
 
     # Upload to S3
     s3_key = f"packages/{name}/{zip_path.name}"
     try:
-        s3 = boto3.client("s3", region_name=config.aws_region)
+        s3 = _get_session(config.aws_profile).client("s3", region_name=config.aws_region)
         s3.upload_file(str(zip_path), bucket, s3_key)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"S3 upload failed: {e}")

@@ -57,6 +57,7 @@ Conditions:
   UseDirectIAM: !Equals [!Ref FederationType, direct]
   UseCognitoIdentity: !Equals [!Ref FederationType, cognito]
   MonitoringEnabled: !Equals [!Ref EnableMonitoring, 'true']
+  IsGoogleIssuer: !Equals [!Ref OidcIssuerUrl, 'https://accounts.google.com']
   # Partition-aware conditions for Cognito Identity service principals
   IsGovCloudWest: !Equals [!Ref 'AWS::Region', 'us-gov-west-1']
   IsGovCloudEast: !Equals [!Ref 'AWS::Region', 'us-gov-east-1']
@@ -170,6 +171,11 @@ Resources:
             Action:
               - 'sts:AssumeRoleWithWebIdentity'
               - 'sts:TagSession'
+            Condition: !If
+              - IsGoogleIssuer
+              - StringEquals:
+                  'accounts.google.com:aud': !Ref OidcClientId
+              - !Ref 'AWS::NoValue'
       ManagedPolicyArns:
         - !Ref BedrockAccessPolicy
       Tags:
