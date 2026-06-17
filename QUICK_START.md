@@ -110,7 +110,20 @@ make build
 Build complete. Run 'uv run ccwb' to start.
 ```
 
-> **Optional — developer hot-reload mode:** instead of `make build`, run `make dev` to start the Vite dev server and uvicorn with reload (frontend on `:5173`, backend on `:8400`). Use this only when modifying the wizard itself, not for production deployment.
+> **Windows — no `make`:** Windows has no `make`, `rm`, or `cp`, so run the three build steps directly in PowerShell:
+>
+> ```powershell
+> # 1. Build the frontend
+> cd web/frontend; yarn install; yarn build; cd ../..
+>
+> # 2. Replace the backend's static folder with the fresh build
+> Remove-Item -Recurse -Force web/backend/ccwb_wizard/static -ErrorAction SilentlyContinue
+> Copy-Item -Recurse web/frontend/dist web/backend/ccwb_wizard/static
+> ```
+>
+> Then start the wizard with `uv run ccwb` as usual.
+
+> **Optional — developer hot-reload mode:** instead of `make build`, run `make dev` to start the Vite dev server and uvicorn with reload (frontend on `:5173`, backend on `:8400`). Use this only when modifying the wizard itself, not for production deployment. On Windows without `make`, run the two processes in separate terminals: `cd web/frontend; yarn dev` in one, and `uv run uvicorn ccwb_wizard.main:app --host 127.0.0.1 --port 8400 --reload` in another.
 
 ---
 

@@ -70,6 +70,19 @@ make build                # 프론트엔드 빌드 → 백엔드 static에 복�
 
 `make build`가 끝나면 `Build complete. Run 'uv run ccwb' to start.` 메시지가 출력됩니다.
 
+> **Windows에는 `make`가 없습니다.** `make build`가 하는 세 단계를 PowerShell에서 직접 실행하세요.
+>
+> ```powershell
+> # 1. 프론트엔드 빌드
+> cd web/frontend; yarn install; yarn build; cd ../..
+>
+> # 2. 백엔드 static 폴더를 새 빌드로 교체
+> Remove-Item -Recurse -Force web/backend/ccwb_wizard/static -ErrorAction SilentlyContinue
+> Copy-Item -Recurse web/frontend/dist web/backend/ccwb_wizard/static
+> ```
+>
+> 이후 `uv run ccwb`로 동일하게 실행합니다.
+
 ### 3단계 — AWS 인증
 
 위자드는 **관리자** 자격증명으로 AWS API를 호출합니다. 실행 전에 유효한 세션을 준비하세요.
