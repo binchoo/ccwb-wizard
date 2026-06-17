@@ -13,8 +13,8 @@ Complete deployment walkthrough for IT administrators deploying **Claude Code wi
 ## Critical Path at a glance
 
 ```
-0. Configure your IdP            (Okta / Entra ID / Auth0 / Cognito / generic OIDC)
-        │   → you get: provider domain + client ID
+0. Configure your IdP            (Okta / Entra ID / Auth0 / Google / Cognito / generic OIDC)
+        │   → you get: provider domain (or issuer) + client ID
         ▼
 1. Install prerequisites         (uv, Node.js + yarn, AWS CLI v2, Git)
         ▼
@@ -29,13 +29,15 @@ Complete deployment walkthrough for IT administrators deploying **Claude Code wi
 6. Deploy → Package → Test       (wizard Step 10 runs all three)
         ▼
 7. Distribute to end users       (presigned URL or manual zip)
+        ▼
+8. End-user onboarding           (install → first login → start Claude Code)
 ```
 
-Steps 0–6 are the controlled, must-succeed path. Step 7 and every "Optional" callout are additive.
+Steps 0–6 are the controlled, must-succeed path. Steps 7–8 and every "Optional" callout are additive.
 
 ---
 
-## Step 0 — Configure your Identity Provider (do this first)
+## Step 0 — Identity Provider configuration (do this first)
 
 This guide covers the **AWS infrastructure** side. It assumes your identity provider (IdP) is already configured. **You must finish IdP setup before launching the wizard** — it asks for your provider domain and client ID and cannot proceed without them.
 
@@ -44,14 +46,17 @@ This guide covers the **AWS infrastructure** side. It assumes your identity prov
 | **Okta** | [Okta Setup Guide](assets/docs/providers/okta-setup.md) |
 | **Microsoft Entra ID (Azure AD)** | [Microsoft Entra ID Setup Guide](assets/docs/providers/microsoft-entra-id-setup.md) |
 | **Auth0** | [Auth0 Setup Guide](assets/docs/providers/auth0-setup.md) |
+| **Google (Sign in with Google)** | [Google Setup Guide](assets/docs/providers/google-setup.md) |
 | **AWS Cognito User Pool** | [Cognito User Pool Setup Guide](assets/docs/providers/cognito-user-pool-setup.md) |
 | **PingFederate, Keycloak, ForgeRock, or other generic OIDC** | [Generic OIDC Setup Guide](assets/docs/providers/generic-oidc-setup.md) |
 
-Each guide walks through creating the application, setting the redirect URI to `http://localhost:8400/callback`, enabling PKCE, and noting the two values you need here: your **provider domain** and **client ID**.
+Each guide walks through creating the application, setting the redirect URI to `http://localhost:8400/callback`, enabling PKCE, and noting the two values you need here: your **provider domain** (or issuer URL) and **client ID**.
+
+> **Google is a dedicated path, not generic OIDC.** Google's "Desktop app" OAuth client returns a `client_secret` that must accompany PKCE on the token exchange. You create a **Desktop app** client, enter only the **Client ID** in the wizard, and each end user injects the secret into their OS keyring once after install (covered in [Step 8](#step-8--end-user-onboarding-post-distribution)). The secret never ships in the package.
 
 ---
 
-## Step 1 — Install prerequisites
+## Step 1 — Prerequisites installation
 
 ### Operator (deployment) machine
 
@@ -83,7 +88,7 @@ Claude Code uses Bedrock cross-region inference. In the wizard you select a Clau
 
 ---
 
-## Step 2 — Get the code and build
+## Step 2 — Source checkout and build
 
 ```bash
 # Clone the repository
@@ -107,7 +112,7 @@ Build complete. Run 'uv run ccwb' to start.
 
 ---
 
-## Step 3 — Authenticate to AWS
+## Step 3 — AWS authentication
 
 The wizard calls AWS APIs (using your **administrator** credentials — not developer credentials) to validate your account and deploy stacks. Make sure your terminal has a valid AWS session before launching.
 
@@ -136,7 +141,7 @@ aws sts get-caller-identity
 
 ---
 
-## Step 4 — Launch the wizard
+## Step 4 — Wizard launch
 
 ```bash
 uv run ccwb
@@ -148,7 +153,7 @@ Nothing is deployed to AWS until you reach Step 10 inside the wizard. Everything
 
 ---
 
-## Step 5 — Walk the wizard (11 steps)
+## Step 5 — Wizard walkthrough (11 pages)
 
 The wizard is the operator interface. Each page fills part of one `Config` object saved to `~/.ccwb/profiles/<name>.json`.
 
@@ -168,14 +173,15 @@ The wizard is the operator interface. Each page fills part of one `Config` objec
 
 ### Page 2 — Identity Provider and attribution
 
-Enter your **provider domain** and **client ID** from Step 0. The wizard auto-detects Okta, Entra ID, Auth0, and Cognito from the domain; for other OIDC providers, select **generic** manually.
+Enter your **provider domain** (or issuer URL) and **client ID** from Step 0. The wizard auto-detects Okta, Entra ID, Auth0, and Cognito from the domain; select **Google** or **generic OIDC** manually when prompted.
 
 - **Connection test:** the wizard performs a login and shows the **claims preview** so you can confirm which IdP claims (e.g. `email`, `cognito:groups`, `custom:dept`) are available before mapping.
 - **Attribution mapping:** map IdP claims to dashboard dimensions (`user` / `team` / `dept`). This mapping is applied **dynamically at every authentication** by the credential helper — org changes flow through on the next login without re-packaging. See [ANTHROPIC_CUSTOM_HEADERS_GUIDE.md](assets/docs/ANTHROPIC_CUSTOM_HEADERS_GUIDE.md) for the header contract.
+- **Google note:** for the Google path you enter only the **Client ID** here. The `client_secret` is handled per end-user machine in [Step 8](#step-8--end-user-onboarding-post-distribution), not in the wizard.
 
 ### Page 4 — Bedrock model
 
-Pick the default model developers use (sets `ANTHROPIC_MODEL`), a cross-region inference profile (US / EU / APAC / Global), and a source region. Claude 3.7+ requires a cross-region profile.
+Pick the default model developers use (the wizard pins the tier-specific `ANTHROPIC_DEFAULT_SONNET_MODEL` / `ANTHROPIC_DEFAULT_HAIKU_MODEL` / `ANTHROPIC_DEFAULT_OPUS_MODEL` env keys in `settings.json`), a cross-region inference profile (US / EU / APAC / Global), and a source region. Claude 3.7+ requires a cross-region profile.
 
 ### Page 5 — Bedrock logging (required) and quota (optional)
 
@@ -191,7 +197,7 @@ The Review page renders the materialized `DeploymentArtifacts` — the exact CFN
 
 ---
 
-## Step 6 — Deploy, package, and test (wizard Page 10)
+## Step 6 — Deployment, packaging, and test (wizard Page 10)
 
 Page 10 runs the controlled deployment sequence with live progress (SSE). Run the actions in order:
 
@@ -236,7 +242,7 @@ The wizard simulates the end-user install: OIDC authentication → AWS credentia
 
 ---
 
-## Step 7 — Distribute to end users (optional infrastructure)
+## Step 7 — Distribution to end users (optional infrastructure)
 
 How you deliver the package depends on what you chose on Page 6.
 
@@ -260,7 +266,84 @@ A self-service portal where users log in with SSO and download the right binary 
 
 See [Distribution Comparison](assets/docs/distribution/comparison.md) for details.
 
-End users run `install.sh` / `install.bat`, then authenticate once via `credential-process --profile <name>`. They need only Claude Code and a browser — no AWS account, Python, or Git.
+End users run `install.sh` / `install.bat`, then authenticate once via `credential-process --profile <name>`. They need only Claude Code and a browser — no AWS account, Python, or Git. The full onboarding sequence is in [Step 8](#step-8--end-user-onboarding-post-distribution).
+
+---
+
+## Step 8 — End-user onboarding (post-distribution)
+
+Deployment and distribution put the package in your developers' hands, but **each developer must complete a short one-time setup on their own machine** before Claude Code reaches Bedrock. Hand them the steps below — they require no AWS knowledge.
+
+### Overview — what the end user does
+
+```
+1. Extract the package        (the zip you distributed in Step 7)
+2. Run the installer          (install.sh on macOS/Linux, install.bat on Windows)
+3. (Google IdP only) Set the client secret into the OS keyring   ← one time
+4. First login                (credential-process --profile <name> → browser opens)
+5. Start Claude Code          (it routes to Bedrock automatically)
+```
+
+The installer does the plumbing — it places the `credential-process` binary, writes the `[profile <name>]` entry into `~/.aws/config`, and installs the `~/.claude/settings.json` template. It does **not** install Claude Code itself; that must already be present.
+
+### Step 8.1 — Installer execution
+
+After extracting the package, the user runs the installer for their platform:
+
+```bash
+# macOS / Linux
+./install.sh
+
+# Windows (PowerShell or cmd, from the extracted folder)
+install.bat
+```
+
+If `aws` or `claude` is missing from `PATH`, the installer prints an advisory so the user can install the prerequisite before continuing.
+
+### Step 8.2 — Client secret injection (Google IdP only)
+
+This step applies **only when you deployed the Google path**. Every other IdP uses PKCE alone and skips it.
+
+Because the Google client secret never ships in the package, each user injects it into their OS secure store once:
+
+```bash
+# Interactive — prompts for the secret; the value is not echoed or stored in shell history
+credential-process --set-client-secret --profile <name>
+```
+
+For MDM or scripted rollout, supply the secret through an environment variable instead of a command argument so it stays out of process listings and shell history:
+
+```bash
+CCWB_CLIENT_SECRET="GOCSPX-..." credential-process --set-client-secret --profile <name>
+```
+
+The helper stores the secret only in a recognized OS secure store (macOS Keychain, Windows Credential Manager, freedesktop Secret Service, or KWallet) and refuses to run on an insecure backend. To remove a stored secret later, run `--set-client-secret` and submit an empty value.
+
+> **Why this is safe:** Google treats Desktop-app client secrets as non-confidential — PKCE is the real defense against code interception, so a leaked secret is unusable without the per-session verifier. See the [Google Setup Guide](assets/docs/providers/google-setup.md#6-threat-model) for the full threat model.
+
+### Step 8.3 — First login
+
+The user triggers the initial authentication, which opens a browser for the corporate login:
+
+```bash
+credential-process --profile <name>
+```
+
+After a successful login the helper caches temporary AWS credentials, writes the attribution "magic header" into `~/.claude/settings.json`, and prints the resolved `user` / `team` / `dept` values. AWS credentials are never printed to the terminal.
+
+### Step 8.4 — Claude Code startup
+
+From here the user simply runs Claude Code as usual — the `~/.claude/settings.json` env block routes every request through Bedrock (`CLAUDE_CODE_USE_BEDROCK=1`) using the cached credentials. No model configuration is required; the wizard already pinned the Sonnet/Haiku/Opus model IDs.
+
+### When the user's team or department changes
+
+Attribution claims are captured at login and cached, so an org change in your IdP is **not** reflected until the user re-authenticates. After you update their group/department in the IdP, ask the user to run:
+
+```bash
+credential-process --profile <name> --refresh-identity
+```
+
+This clears the cached credentials and ID token, opens a fresh login, rewrites the magic header, and prints the new attribution. The user then restarts Claude Code, and subsequent usage is billed to the new team/department. For the complete member-lifecycle playbook (onboarding, team change, offboarding), see the [User Lifecycle Runbook](web/binaries/credential_provider/USER_LIFECYCLE_RUNBOOK.md).
 
 ---
 
